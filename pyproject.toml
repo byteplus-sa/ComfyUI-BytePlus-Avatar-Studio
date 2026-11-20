@@ -1,0 +1,38 @@
+[project]
+name = "ComfyUI-BytePlus-Avatar-Studio"
+version = "0.1.0"
+description = "A review-first avatar web app for ComfyUI using BytePlus Seedream, Seed Audio and OmniHuman."
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+classifiers = ["Operating System :: OS Independent"]
+
+[project.urls]
+Homepage = "https://github.com/byteplus-sa/ComfyUI-BytePlus-Avatar-Studio"
+Documentation = "https://github.com/byteplus-sa/ComfyUI-BytePlus-Avatar-Studio#readme"
+Repository = "https://github.com/byteplus-sa/ComfyUI-BytePlus-Avatar-Studio"
+Issues = "https://github.com/byteplus-sa/ComfyUI-BytePlus-Avatar-Studio/issues"
+
+[tool.comfy]
+PublisherId = "byteplus-sa"
+DisplayName = "BytePlus Avatar Studio"
+Icon = "https://raw.githubusercontent.com/byteplus-sa/ComfyUI-BytePlus-Avatar-Studio/main/assets/registry-icon.jpg"
+requires-comfyui = ">=0.31.0"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+exclude = ["frontend", "studio_dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+files = ["avatar_studio"]
+check_untyped_defs = true
+ignore_missing_imports = true
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = ["comfy_api.*", "server", "folder_paths"]
+follow_imports = "skip"

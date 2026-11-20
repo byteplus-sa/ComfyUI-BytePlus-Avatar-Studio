@@ -1,0 +1,75 @@
+name: Publish Registry Release
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: registry-publish
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/tests.yml
+    permissions:
+      contents: read
+
+  publish:
+    name: Publish tested commit
+    needs: tests
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Check publisher credential
+        env:
+          REGISTRY_ACCESS_TOKEN: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
+        run: |
+          if [ -z "$REGISTRY_ACCESS_TOKEN" ]; then
+            echo "::error::Set the repository secret REGISTRY_ACCESS_TOKEN to the BytePlus publisher token."
+            exit 1
+          fi
+      - name: Install Registry CLI
+        run: python -m pip install comfy-cli==1.22.0
+      - name: Validate exact package
+        run: |
+          comfy --skip-prompt --no-enable-telemetry node validate
+          comfy --skip-prompt --no-enable-telemetry node pack
+          python scripts/check_registry_package.py node.zip
+      - name: Bind version tag to the tested commit
+        id: version
+        run: |
+          version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          tag="v$version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if git rev-parse --verify "refs/tags/$tag" >/dev/null 2>&1; then
+            test "$(git rev-list -n 1 "$tag")" = "$GITHUB_SHA"
+          else
+            git tag "$tag" "$GITHUB_SHA"
+            git push origin "$tag"
+          fi
+      - name: Publish Registry version
+        env:
+          REGISTRY_ACCESS_TOKEN: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
+        run: |
+          comfy --skip-prompt --no-enable-telemetry node publish \
+            --token "$REGISTRY_ACCESS_TOKEN" \
+            --changelog "Review-first avatar creation with Seedream, Seed Audio and OmniHuman; direct uploads, explicit approvals, Desktop OAuth and local video download. Requires ModelArk >=0.10.0."
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --title "$TAG" \
+              --notes "BytePlus Avatar Studio. Requires ComfyUI >=0.31.0 and ModelArk >=0.10.0. Registry upload success is separate from security-scan approval; verify both packages are Active before relying on Manager installation."
+          fi
