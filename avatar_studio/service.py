@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 from contextlib import suppress
 from functools import partial
@@ -32,12 +33,18 @@ class StudioService:
             self.monitor.cancel()
             with suppress(asyncio.CancelledError):
                 await self.monitor
+        if close := getattr(self.bridge, "close", None):
+            result = close()
+            if inspect.isawaitable(result):
+                await result
         self.store.close()
 
-    async def generate(self, owner, project_id, revision, kind, operation_id, sensitive):
+    async def generate(self, owner, project_id, revision, kind, operation_id, sensitive, generation_token=None):
         lock = self.locks.setdefault(project_id, asyncio.Lock())
         async with lock:
-            job, created = self.store.begin_job(owner, project_id, revision, kind, operation_id)
+            job, created = self.store.begin_job(
+                owner, project_id, revision, kind, operation_id, generation_token=generation_token
+            )
             if not created:
                 return self.store.get(owner, project_id)
             try:
@@ -58,7 +65,10 @@ class StudioService:
                 self.store.update_job(job["id"], state="failed", message="Could not prepare the local workflow.")
                 raise StudioError("Could not prepare the local workflow.", 500) from None
             self.store.update_job(
-                job["id"], state="unknown", message="Submitting once; acceptance is not yet confirmed."
+                job["id"],
+                state="unknown",
+                runner="preparation" if kind in {"image", "audio"} else "queue",
+                message="Submitting once; acceptance is not yet confirmed.",
             )
             try:
                 await self.bridge.submit(graph, job["prompt_id"], sensitive, owner)
@@ -70,7 +80,11 @@ class StudioService:
                     job["id"], state="unknown", message="Submission acceptance is unknown. Do not regenerate."
                 )
                 raise StudioError("Submission acceptance is unknown. Keep this operation for recovery.", 503) from None
-            self.store.update_job(job["id"], state="queued", message="Waiting in the ComfyUI queue.")
+            self.store.update_job(
+                job["id"],
+                state="running" if kind in {"image", "audio"} else "queued",
+                message="Generating candidate." if kind in {"image", "audio"} else "Waiting in the ComfyUI queue.",
+            )
             self.start()
             return self.store.get(owner, project_id)
 
@@ -110,6 +124,30 @@ class StudioService:
             self.start()
             return self.store.get(owner, job["project_id"])
 
+    async def resolve(self, owner, job_id):
+        job = self.store.job(owner, job_id)
+        lock = self.locks.setdefault(job["project_id"], asyncio.Lock())
+        async with lock:
+            job = self.store.job(owner, job_id)
+            if (
+                job["kind"] not in {"image", "audio"}
+                or job.get("runner") != "preparation"
+                or job["state"] not in {"unknown", "dismissed"}
+            ):
+                raise StudioError("Only unresolved portrait or narration preparation can be dismissed.", 409)
+            if job["state"] == "dismissed":
+                return self.store.get(owner, job["project_id"])
+            state = self.bridge.inspect(job)
+            if state.get("state") not in {"unknown", "missing"}:
+                raise StudioError(
+                    "Preparation is still active or has a result to collect. Wait for collection before resolving.",
+                    409,
+                )
+            self.store.resolve_job(owner, job_id)
+            if release := getattr(self.bridge, "release", None):
+                release(job["prompt_id"])
+            return self.store.get(owner, job["project_id"])
+
     async def cancel(self, owner, job_id):
         job = self.store.job(owner, job_id)
         lock = self.locks.setdefault(job["project_id"], asyncio.Lock())
@@ -140,7 +178,7 @@ class StudioService:
         with self.store.transaction():
             project = self.store._project(owner, project_id)
             self.store._revision(project, revision)
-            self.store._idle(project_id)
+            self.store._idle(project_id, {"image" if kind == "reference" else kind})
         preparation = asyncio.create_task(asyncio.to_thread(prepare, data, self.store.media_dir))
         try:
             path, metadata = await asyncio.shield(preparation)
@@ -156,7 +194,7 @@ class StudioService:
             with self.store.transaction():
                 project = self.store._project(owner, project_id)
                 self.store._revision(project, revision)
-                self.store._idle(project_id)
+                self.store._idle(project_id, {"image" if kind == "reference" else kind})
                 self.store.add_asset(owner, project_id, kind, path, metadata)
         except Exception:
             path.unlink(missing_ok=True)
@@ -176,6 +214,14 @@ class StudioService:
                 message="Generating through ComfyUI."
                 if state["state"] == "running"
                 else "Waiting in the ComfyUI queue.",
+            )
+            return
+        if state["state"] == "unknown" or (state["state"] == "missing" and job.get("runner") == "preparation"):
+            self.store.update_job(
+                job["id"],
+                state="unknown",
+                message="Preparation stopped without a confirmed result. Check provider usage before replacing it. "
+                "The other preparation stage is still available.",
             )
             return
         if state["state"] in {"failed", "missing"}:
@@ -217,6 +263,8 @@ class StudioService:
             task_id=task_id,
             message="Ready for review." if job["kind"] != "video" else "Video saved. Review before publishing.",
         )
+        if release := getattr(self.bridge, "release", None):
+            release(job["prompt_id"])
 
     async def watch(self):
         while True:

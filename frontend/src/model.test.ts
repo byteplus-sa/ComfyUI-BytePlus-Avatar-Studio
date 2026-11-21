@@ -126,6 +126,25 @@ describe("review gating", () => {
     value.jobs[0].state = "done";
     expect(busy(value)).toBe(false);
   });
+  it("blocks only the active preparation stage and video", () => {
+    const value = project();
+    value.jobs = [{
+      id: "image-job", kind: "image", state: "running",
+      task_id: null, message: "", created_at: 0,
+    }];
+    for (const state of ["preparing", "queued", "running", "unknown"]) {
+      value.jobs[0].state = state;
+      expect(busy(value, "image")).toBe(true);
+      expect(busy(value, "audio")).toBe(false);
+      expect(busy(value, "video")).toBe(true);
+    }
+    value.jobs[0].kind = "video";
+    expect(busy(value, "image")).toBe(true);
+    expect(busy(value, "audio")).toBe(true);
+    value.jobs[0].state = "failed";
+    expect(busy(value, "image")).toBe(false);
+    expect(busy(value, "audio")).toBe(false);
+  });
   it("serializes only editable fields, not approvals or operation metadata", () => {
     expect(formFrom(project())).not.toHaveProperty("approvals");
     expect(formFrom(project())).not.toHaveProperty("jobs");

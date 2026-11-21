@@ -9,21 +9,24 @@ import type { Studio } from "./useStudio";
 export function Activity({
   studio,
   requestCancel,
+  requestResolve,
 }: {
   studio: Studio;
   requestCancel: (job: Job) => void;
+  requestResolve: (job: Job) => void;
 }) {
   const jobs = studio.project?.jobs;
   if (!jobs?.length) return null;
   const recent = [...jobs].reverse();
-  const completed = recent.filter((job) => job.state === "done");
-  const visible = recent.filter((job) => job.state !== "done");
+  const completed = recent.filter((job) => ["done", "dismissed"].includes(job.state));
+  const visible = recent.filter((job) => !["done", "dismissed"].includes(job.state));
   const renderJob = (job: Job) => (
     <ActivityRow
       key={job.id}
       job={job}
       studio={studio}
       requestCancel={requestCancel}
+      requestResolve={requestResolve}
     />
   );
   return (
@@ -47,10 +50,12 @@ function ActivityRow({
   job,
   studio,
   requestCancel,
+  requestResolve,
 }: {
   job: Job;
   studio: Studio;
   requestCancel: (job: Job) => void;
+  requestResolve: (job: Job) => void;
 }) {
   const [taskId, setTaskId] = useState("");
   const value = job.task_id || taskId;
@@ -71,6 +76,19 @@ function ActivityRow({
         <p>{job.message}</p>
         {job.task_id && <code>{job.task_id}</code>}
       </div>
+      {job.kind !== "video" &&
+        job.state === "unknown" &&
+        "runner" in job &&
+        job.runner === "preparation" && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={studio.working}
+            onClick={() => requestResolve(job)}
+          >
+            Resolve preparation
+          </Button>
+        )}
       {job.kind === "video" && ["unknown", "failed"].includes(job.state) && (
         <div className="recovery-control">
           <Input

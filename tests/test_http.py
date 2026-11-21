@@ -177,6 +177,207 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 503)
         self.bridge.submit.assert_not_awaited()
 
+    async def test_image_and_audio_accept_the_same_saved_snapshot_without_duplicate_stage_work(self):
+        await self.patch(script="Welcome to our studio.", character_prompt="A fictional presenter")
+        target = f"{PREFIX}/api/projects/{self.project['id']}/generate"
+
+        def body(kind):
+            return {
+                "revision": self.project["revision"],
+                "kind": kind,
+                "operation_id": str(uuid4()),
+                "generation_token": self.project["generation_tokens"][kind],
+            }
+
+        responses = await asyncio.gather(
+            self.client.post(target, json=body("image")), self.client.post(target, json=body("audio"))
+        )
+        self.assertEqual([response.status for response in responses], [202, 202])
+        self.assertEqual(self.bridge.submit.await_count, 2)
+        current = self.store.get("default", self.project["id"])
+        self.assertEqual({job["kind"] for job in current["jobs"]}, {"image", "audio"})
+        self.assertTrue(all(job["runner"] == "preparation" for job in current["jobs"]))
+        self.assertEqual((await self.client.post(target, json=body("image"))).status, 409)
+        self.assertEqual(self.bridge.submit.await_count, 2)
+
+    async def test_unknown_preparation_after_restart_is_not_requeued_or_marked_successful(self):
+        await self.patch(character_prompt="A fictional presenter")
+        response = await self.client.post(
+            f"{PREFIX}/api/projects/{self.project['id']}/generate",
+            json={"revision": self.project["revision"], "kind": "image", "operation_id": str(uuid4())},
+        )
+        project = await response.json()
+        job = project["jobs"][0]
+        self.bridge.inspect.return_value = {"state": "missing"}
+        await self.service.tick(job)
+        unresolved = self.store.job("default", job["id"])
+        self.assertEqual(unresolved["state"], "unknown")
+        self.assertIn("other preparation stage", unresolved["message"])
+        self.assertEqual(self.bridge.submit.await_count, 1)
+
+    def unresolved_preparation(self, kind="image"):
+        project = self.store.get("default", self.project["id"])
+        job, _ = self.store.begin_job("default", project["id"], project["revision"], kind, str(uuid4()))
+        return self.store.update_job(job["id"], state="unknown", runner="preparation")
+
+    async def test_resolution_requires_exact_acknowledgement_and_valid_json(self):
+        job = self.unresolved_preparation()
+        endpoint = f"{PREFIX}/api/jobs/{job['id']}/resolve"
+        for body in ({}, *({"acknowledge": value} for value in (None, False, "true", 1, [], {}))):
+            with self.subTest(body=body):
+                response = await self.client.post(endpoint, json=body)
+                self.assertEqual(response.status, 400)
+        for data, status in (("", 400), ("[]", 400), ("{", 400), ("x" * 17000, 413)):
+            with self.subTest(data=data[:20]):
+                self.assertEqual((await self.client.post(endpoint, data=data)).status, status)
+        self.assertEqual(self.store.job("default", job["id"]), job)
+        self.bridge.inspect.assert_not_called()
+        self.bridge.release.assert_not_called()
+        self.bridge.submit.assert_not_awaited()
+
+    async def test_resolution_is_owner_scoped_and_same_origin(self):
+        job = self.unresolved_preparation()
+        for job_id, headers, status in (
+            (job["id"], {"Comfy-User": "other"}, 404),
+            (job["id"], {"Sec-Fetch-Site": "cross-site"}, 403),
+            (str(uuid4()), {}, 404),
+            ("invalid", {}, 400),
+        ):
+            with self.subTest(job_id=job_id, headers=headers):
+                response = await self.client.post(
+                    f"{PREFIX}/api/jobs/{job_id}/resolve", json={"acknowledge": True}, headers=headers
+                )
+                self.assertEqual(response.status, status)
+        self.assertEqual(self.store.job("default", job["id"]), job)
+        self.bridge.inspect.assert_not_called()
+        self.bridge.release.assert_not_called()
+
+    async def test_resolution_dismisses_missing_or_unknown_preparation_without_provider_work(self):
+        for kind, observed in (("image", "missing"), ("audio", "unknown")):
+            with self.subTest(kind=kind, observed=observed):
+                job = self.unresolved_preparation(kind)
+                original = self.store.get("default", self.project["id"])
+                self.bridge.inspect.return_value = {"state": observed}
+                self.bridge.release.reset_mock()
+                response = await self.client.post(
+                    f"{PREFIX}/api/jobs/{job['id']}/resolve", json={"acknowledge": True}
+                )
+                self.assertEqual(response.status, 200)
+                result = await response.json()
+                resolved = next(item for item in result["jobs"] if item["id"] == job["id"])
+                self.assertEqual(resolved["state"], "dismissed")
+                self.assertEqual(resolved["prompt_id"], job["prompt_id"])
+                self.assertIn("provider usage", resolved["message"])
+                for key in ("current", "approvals", "assets", "generation_tokens"):
+                    self.assertEqual(result[key], original[key])
+                self.bridge.release.assert_called_once_with(job["prompt_id"])
+        self.assertEqual(self.store.pending_jobs(), [])
+        self.bridge.submit.assert_not_awaited()
+        self.bridge.cancel_task.assert_not_awaited()
+        self.bridge.stage_ready.assert_not_called()
+        self.service.start.assert_not_called()
+        self.bridge.inspect.reset_mock()
+        with (
+            patch("avatar_studio.service.asyncio.sleep", AsyncMock(side_effect=asyncio.CancelledError)),
+            self.assertRaises(asyncio.CancelledError),
+        ):
+            await self.service.watch()
+        self.bridge.inspect.assert_not_called()
+
+    async def test_resolution_rejects_live_or_collectable_bridge_results(self):
+        job = self.unresolved_preparation()
+        for state in ("queued", "running", "finished", "failed", "unexpected", None):
+            with self.subTest(state=state):
+                self.bridge.inspect.return_value = {"state": state}
+                response = await self.client.post(
+                    f"{PREFIX}/api/jobs/{job['id']}/resolve", json={"acknowledge": True}
+                )
+                self.assertEqual(response.status, 409)
+                self.assertEqual(self.store.job("default", job["id"]), job)
+        self.bridge.release.assert_not_called()
+        self.bridge.submit.assert_not_awaited()
+        self.bridge.cancel_task.assert_not_awaited()
+
+    async def test_resolution_rejects_non_preparation_jobs_and_non_unknown_states_before_inspection(self):
+        job = self.unresolved_preparation()
+        invalid = [
+            {"kind": "video", "runner": "preparation", "state": "unknown"},
+            {"kind": "image", "runner": "queue", "state": "unknown"},
+            {"kind": "audio", "runner": None, "state": "unknown"},
+            *(
+                {"kind": "image", "runner": "preparation", "state": state}
+                for state in ("preparing", "queued", "running", "failed", "done", "canceled")
+            ),
+        ]
+        for fields in invalid:
+            with self.subTest(fields=fields):
+                original = self.store.update_job(job["id"], **fields)
+                response = await self.client.post(
+                    f"{PREFIX}/api/jobs/{job['id']}/resolve", json={"acknowledge": True}
+                )
+                self.assertEqual(response.status, 409)
+                self.assertEqual(self.store.job("default", job["id"]), original)
+        self.bridge.inspect.assert_not_called()
+        self.bridge.release.assert_not_called()
+
+    async def test_resolution_inspection_failure_keeps_the_job_unknown_and_redacts_details(self):
+        job = self.unresolved_preparation()
+        self.bridge.inspect.side_effect = RuntimeError("SENSITIVE_FIXTURE_DO_NOT_EXPOSE")
+        response = await self.client.post(f"{PREFIX}/api/jobs/{job['id']}/resolve", json={"acknowledge": True})
+        self.assertEqual(response.status, 500)
+        self.assertNotIn("SENSITIVE_FIXTURE", await response.text())
+        self.assertEqual(self.store.job("default", job["id"]), job)
+        self.bridge.release.assert_not_called()
+
+    async def test_resolution_is_idempotent_for_concurrent_and_repeated_requests(self):
+        job = self.unresolved_preparation()
+        self.bridge.inspect.return_value = {"state": "unknown"}
+        endpoint = f"{PREFIX}/api/jobs/{job['id']}/resolve"
+        responses = await asyncio.gather(
+            self.client.post(endpoint, json={"acknowledge": True}),
+            self.client.post(endpoint, json={"acknowledge": True}),
+        )
+        self.assertEqual([response.status for response in responses], [200, 200])
+        first, second = [await response.json() for response in responses]
+        self.assertEqual(first, second)
+        response = await self.client.post(endpoint, json={"acknowledge": True})
+        self.assertEqual(await response.json(), first)
+        self.bridge.inspect.assert_called_once()
+        self.bridge.release.assert_called_once_with(job["prompt_id"])
+        self.bridge.submit.assert_not_awaited()
+        self.bridge.cancel_task.assert_not_awaited()
+
+    async def test_resolution_rechecks_job_state_after_acquiring_the_project_lock(self):
+        job = self.unresolved_preparation()
+        lock = self.service.locks.setdefault(self.project["id"], asyncio.Lock())
+        async with lock:
+            resolution = asyncio.create_task(self.service.resolve("default", job["id"]))
+            await asyncio.sleep(0)
+            self.assertFalse(resolution.done())
+            self.store.update_job(job["id"], state="done")
+        with self.assertRaises(StudioError) as caught:
+            await resolution
+        self.assertEqual(caught.exception.status, 409)
+        self.bridge.inspect.assert_not_called()
+        self.bridge.release.assert_not_called()
+        self.assertEqual(self.store.job("default", job["id"])["state"], "done")
+
+    async def test_resolution_checks_bridge_state_after_waiting_for_the_project_lock(self):
+        job = self.unresolved_preparation()
+        self.bridge.inspect.return_value = {"state": "missing"}
+        lock = self.service.locks.setdefault(self.project["id"], asyncio.Lock())
+        async with lock:
+            resolution = asyncio.create_task(self.service.resolve("default", job["id"]))
+            await asyncio.sleep(0)
+            self.assertFalse(resolution.done())
+            self.bridge.inspect.assert_not_called()
+            self.bridge.inspect.return_value = {"state": "finished", "outputs": {"images": [{"filename": "ready.png"}]}}
+        with self.assertRaises(StudioError) as caught:
+            await resolution
+        self.assertEqual(caught.exception.status, 409)
+        self.assertEqual(self.store.job("default", job["id"]), job)
+        self.bridge.release.assert_not_called()
+
     async def test_unknown_acceptance_is_not_retried_and_secret_exception_is_not_exposed(self):
         await self.patch(character_prompt="Fictional presenter")
         self.bridge.submit.side_effect = RuntimeError("SENSITIVE_FIXTURE_DO_NOT_EXPOSE")

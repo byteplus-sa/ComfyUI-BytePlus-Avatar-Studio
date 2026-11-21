@@ -1,4 +1,4 @@
-import { ImagePlus, Sparkles, Upload, X } from "lucide-react";
+import { ImagePlus, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -8,6 +8,7 @@ import { AssetReview } from "./AssetReview";
 import { CandidateUpload } from "./CandidateUpload";
 import type { CandidateKind } from "./uploads";
 import { FieldError } from "./FieldError";
+import { GenerationButton } from "./GenerationButton";
 import { OptionsDisclosure } from "./OptionsDisclosure";
 import {
   audioPromptLength,
@@ -16,7 +17,7 @@ import {
   RATIOS,
   type FieldErrors,
 } from "./validation";
-import { currentAsset, type Form, type Kind } from "./model";
+import { type Form, type Kind } from "./model";
 import type { Studio } from "./useStudio";
 
 export function AvatarFields({
@@ -34,7 +35,8 @@ export function AvatarFields({
 }) {
   const { project, form, field } = studio;
   if (!project || !form) return null;
-  const disabled = studio.working || studio.active || studio.conflict;
+  const imageDisabled = studio.working || studio.activeFor("image") || studio.conflict;
+  const audioDisabled = studio.working || studio.activeFor("audio") || studio.conflict;
   const reference = project.assets.find(
     (asset) => asset.id === project.reference_id,
   );
@@ -58,14 +60,14 @@ export function AvatarFields({
               For generation
             </span>
           </label>
-          <label className={`upload-link ${disabled ? "opacity-50" : ""}`}>
+          <label className={`upload-link ${audioDisabled ? "opacity-50" : ""}`}>
             <Upload className="size-3.5" /> Import .txt
             <input
               className="file-input"
               type="file"
               aria-label="Import script file"
               accept=".txt,text/plain"
-              disabled={disabled}
+              disabled={audioDisabled}
               onChange={(event) => {
                 const file = event.target.files?.[0];
                 if (file) void studio.uploadScript(file);
@@ -83,7 +85,7 @@ export function AvatarFields({
           aria-describedby={`script-budget${errors.script ? " script-error" : ""}`}
           placeholder="What would you like your avatar to say?"
           value={form.script}
-          disabled={disabled}
+          disabled={audioDisabled}
           onBlur={() => touch("script")}
           onChange={(event) => field("script", event.target.value)}
         />
@@ -112,7 +114,7 @@ export function AvatarFields({
                 <NativeSelect
                   id="language"
                   value={form.language}
-                  disabled={disabled}
+                  disabled={audioDisabled}
                   aria-invalid={Boolean(errors.language)}
                   aria-describedby={
                     errors.language ? "language-error" : undefined
@@ -134,7 +136,7 @@ export function AvatarFields({
                   id="voice"
                   maxLength={500}
                   value={form.voice_direction}
-                  disabled={disabled}
+                  disabled={audioDisabled}
                   aria-invalid={Boolean(errors.voice_direction)}
                   aria-describedby={
                     errors.voice_direction ? "voice-error" : undefined
@@ -150,17 +152,8 @@ export function AvatarFields({
           </OptionsDisclosure>
         </div>
         <div className="generation-action">
-          <Button
-            variant="outline"
-            disabled={disabled || !studio.setup?.ready}
-            onClick={() => generate("audio")}
-          >
-            <Sparkles />
-            {currentAsset(project, "audio")
-              ? "Regenerate narration"
-              : "Generate narration"}
-          </Button>
-          <CandidateUpload kind="audio" disabled={disabled} upload={upload} />
+          <GenerationButton studio={studio} kind="audio" generate={() => generate("audio")} />
+          <CandidateUpload kind="audio" disabled={audioDisabled} upload={upload} />
         </div>
         <AssetReview studio={studio} kind="audio" />
       </section>
@@ -187,7 +180,7 @@ export function AvatarFields({
           }
           placeholder="Describe their appearance, expression and setting."
           value={form.character_prompt}
-          disabled={disabled}
+          disabled={imageDisabled}
           onBlur={() => touch("character_prompt")}
           onChange={(event) => field("character_prompt", event.target.value)}
         />
@@ -203,14 +196,14 @@ export function AvatarFields({
               variant="ghost"
               size="icon-sm"
               aria-label="Remove reference"
-              disabled={disabled}
+              disabled={imageDisabled}
               onClick={() => void studio.removeReference()}
             >
               <X />
             </Button>
           </div>
         ) : (
-          <label className={`reference-upload ${disabled ? "opacity-50" : ""}`}>
+          <label className={`reference-upload ${imageDisabled ? "opacity-50" : ""}`}>
             <ImagePlus className="size-4" />
             <span>
               Add reference image{" "}
@@ -222,7 +215,7 @@ export function AvatarFields({
               aria-label="Character reference image"
               aria-describedby="reference-limits"
               accept="image/png,image/jpeg,image/webp"
-              disabled={disabled}
+              disabled={imageDisabled}
               onChange={(event) => {
                 const file = event.target.files?.[0];
                 if (file) void studio.uploadReference(file);
@@ -248,7 +241,7 @@ export function AvatarFields({
                 variant="ghost"
                 size="sm"
                 key={ratio.value}
-                disabled={disabled}
+                disabled={imageDisabled}
                 aria-label={`${ratio.label} ${ratio.value}`}
                 aria-pressed={form.ratio === ratio.value}
                 onClick={() => field("ratio", ratio.value)}
@@ -261,17 +254,8 @@ export function AvatarFields({
         </fieldset>
         <FieldError id="ratio-error" message={errors.ratio} />
         <div className="generation-action">
-          <Button
-            variant="outline"
-            disabled={disabled || !studio.setup?.ready}
-            onClick={() => generate("image")}
-          >
-            <Sparkles />
-            {currentAsset(project, "image")
-              ? "Regenerate portrait"
-              : "Generate portrait"}
-          </Button>
-          <CandidateUpload kind="image" disabled={disabled} upload={upload} />
+          <GenerationButton studio={studio} kind="image" generate={() => generate("image")} />
+          <CandidateUpload kind="image" disabled={imageDisabled} upload={upload} />
         </div>
         <AssetReview studio={studio} kind="image" />
       </section>

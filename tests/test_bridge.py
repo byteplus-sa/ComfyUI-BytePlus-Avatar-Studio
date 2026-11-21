@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from threading import RLock
 from types import SimpleNamespace
@@ -18,6 +19,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             return validation
 
         bridge.execution = SimpleNamespace(validate_prompt=validate)
+        bridge.validate_preparation = Mock()
         return bridge
 
     async def test_partial_validation_cannot_submit_paid_generation_without_its_saver(self):
@@ -93,6 +95,97 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(StudioError) as caught:
             await bridge.cancel_task("original-task")
         self.assertNotIn("private-fixture", str(caught.exception))
+
+    async def test_preparation_jobs_overlap_without_using_the_global_queue(self):
+        bridge = self.bridge((True, None, ["save"], {}))
+        bridge.preparations = {}
+        bridge.preparation_tasks = {}
+        started = {"image": asyncio.Event(), "audio": asyncio.Event()}
+        release = {"image": asyncio.Event(), "audio": asyncio.Event()}
+
+        async def run(graph):
+            kind = "image" if graph["generate"]["class_type"] == "BytePlusSeedream" else "audio"
+            started[kind].set()
+            await release[kind].wait()
+            if kind == "image":
+                raise RuntimeError("private-provider-error")
+            return {"audio": [{"filename": "narration.flac"}]}
+
+        bridge.preparation = SimpleNamespace(run=AsyncMock(side_effect=run))
+        for kind, provider, saver in (
+            ("image", "BytePlusSeedream", "SaveImage"),
+            ("audio", "BytePlusSeedAudio", "SaveAudio"),
+        ):
+            graph = {"generate": {"class_type": provider, "inputs": {}}, "save": {"class_type": saver, "inputs": {}}}
+            await bridge.submit(graph, kind, {}, "default")
+            await bridge.submit(graph, kind, {}, "default")
+        try:
+            await asyncio.wait_for(asyncio.gather(*(event.wait() for event in started.values())), timeout=2)
+            self.assertEqual(bridge.preparation.run.await_count, 2)
+            bridge.server.prompt_queue.put.assert_not_called()
+            release["image"].set()
+            await bridge.preparation_tasks["image"]
+            self.assertEqual(bridge.inspect({"runner": "preparation", "prompt_id": "image"}), {"state": "unknown"})
+            self.assertEqual(bridge.inspect({"runner": "preparation", "prompt_id": "audio"}), {"state": "running"})
+            release["audio"].set()
+            await bridge.preparation_tasks["audio"]
+            self.assertEqual(bridge.inspect({"runner": "preparation", "prompt_id": "audio"})["state"], "finished")
+            bridge.release("audio")
+            self.assertNotIn("audio", bridge.preparations)
+        finally:
+            await bridge.close()
+
+    async def test_preparation_shutdown_and_restart_never_resubmit_paid_work(self):
+        bridge = self.bridge((True, None, ["save"], {}))
+        bridge.preparations = {}
+        bridge.preparation_tasks = {}
+
+        async def pending(graph):
+            await asyncio.Event().wait()
+
+        bridge.preparation = SimpleNamespace(run=AsyncMock(side_effect=pending))
+        graph = {
+            "generate": {"class_type": "BytePlusSeedAudio", "inputs": {}},
+            "save": {"class_type": "SaveAudio", "inputs": {}},
+        }
+        await bridge.submit(graph, "audio", {}, "default")
+        await asyncio.sleep(0)
+        await bridge.close()
+        self.assertFalse(bridge.preparation_tasks)
+        self.assertEqual(bridge.inspect({"runner": "preparation", "prompt_id": "audio"}), {"state": "missing"})
+        bridge.preparation.run.assert_awaited_once()
+        bridge.server.prompt_queue.put.assert_not_called()
+
+    async def test_parallel_runner_rejects_mixed_workflows_before_execution(self):
+        bridge = self.bridge((True, None, ["save"], {}))
+        graph = {
+            "generate": {"class_type": "BytePlusSeedAudio", "inputs": {}},
+            "save": {"class_type": "SaveVideo", "inputs": {}},
+        }
+        with self.assertRaises(StudioError):
+            await bridge.submit(graph, "operation", {}, "default")
+        bridge.server.prompt_queue.put.assert_not_called()
+
+    async def test_definite_preparation_validation_failure_never_starts_a_worker(self):
+        bridge = self.bridge((True, None, ["save"], {}))
+        bridge.preparations = {}
+        bridge.validate_preparation.side_effect = StudioError("Invalid narration.", 422)
+        bridge.preparation = SimpleNamespace(run=AsyncMock())
+        graph = {
+            "generate": {"class_type": "BytePlusSeedAudio", "inputs": {}},
+            "save": {"class_type": "SaveAudio", "inputs": {}},
+        }
+        with self.assertRaises(StudioError):
+            await bridge.submit(graph, "audio", {}, "default")
+        bridge.preparation.run.assert_not_awaited()
+        self.assertFalse(bridge.preparations)
+
+    async def test_worker_setup_failure_is_failed_not_permanently_unknown(self):
+        bridge = self.bridge((True, None, ["save"], {}))
+        bridge.preparations = {}
+        bridge.preparation = SimpleNamespace(run=AsyncMock(side_effect=StudioError("Worker setup failed.")))
+        await bridge._prepare({}, "audio")
+        self.assertEqual(bridge.inspect({"runner": "preparation", "prompt_id": "audio"}), {"state": "failed"})
 
     async def test_released_companion_http_400_cancel_refusal_is_not_a_server_failure(self):
         class ProviderError(Exception):

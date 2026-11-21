@@ -10,7 +10,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 ACTIVE_STATES = {"preparing", "queued", "running", "unknown"}
-IMAGE_FIELDS = {"character_prompt", "ratio", "reference_id"}
+IMAGE_FIELDS = {"character_prompt", "ratio", "reference_id", "enable_watermark"}
 AUDIO_FIELDS = {"script", "voice_direction", "language"}
 TEXT_LIMITS = {"title": 120, "script": 3000, "character_prompt": 2000, "voice_direction": 500, "motion_prompt": 2000}
 RATIOS = {"1:1", "3:4", "9:16"}
@@ -45,6 +45,13 @@ def uses_uploaded_asset(project, kind):
         asset["id"] == project["current"][kind] and asset["kind"] == kind and asset.get("origin") == "upload"
         for asset in project["assets"]
     )
+
+
+def preparation_token(project, kind):
+    fields = IMAGE_FIELDS if kind == "image" else AUDIO_FIELDS
+    inputs = {name: project[name] for name in fields}
+    inputs["candidate"] = project["current"][kind]
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
 
 
 def validate_fields(fields):
@@ -105,9 +112,12 @@ class Store:
             for row in self.db.execute("SELECT data FROM jobs WHERE project_id=?", (project_id,))
         ]
 
-    def _idle(self, project_id):
-        if any(job["state"] in ACTIVE_STATES for job in self._jobs(project_id)):
-            raise StudioError("An operation is still active or needs recovery. Resolve it before changing inputs.", 409)
+    def _idle(self, project_id, kinds=None):
+        if any(
+            job["state"] in ACTIVE_STATES and (kinds is None or job["kind"] == "video" or job["kind"] in kinds)
+            for job in self._jobs(project_id)
+        ):
+            raise StudioError("This stage is active or needs attention. Resolve it before replacing its inputs.", 409)
 
     def _revision(self, project, revision):
         if type(revision) is not int or project["revision"] != revision:
@@ -141,6 +151,7 @@ class Store:
         with self.transaction():
             project = self._project(owner, project_id)
             project["jobs"] = self._jobs(project_id)
+            project["generation_tokens"] = {kind: preparation_token(project, kind) for kind in ("image", "audio")}
             return project
 
     def list(self, owner):
@@ -159,8 +170,13 @@ class Store:
         with self.transaction():
             project = self._project(owner, project_id)
             self._revision(project, revision)
-            self._idle(project_id)
             changed = {name for name, value in fields.items() if project[name] != value}
+            affected = set()
+            if changed & IMAGE_FIELDS:
+                affected.add("image")
+            if changed & AUDIO_FIELDS:
+                affected.add("audio")
+            self._idle(project_id, affected)
             project.update(fields)
             if changed & IMAGE_FIELDS and not uses_uploaded_asset(project, "image"):
                 project["approvals"]["image"] = None
@@ -217,7 +233,7 @@ class Store:
         with self.transaction():
             project = self._project(owner, project_id)
             self._revision(project, revision)
-            self._idle(project_id)
+            self._idle(project_id, {"image"})
             project["reference_id"] = None
             if not uses_uploaded_asset(project, "image"):
                 project["current"]["image"] = None
@@ -250,7 +266,7 @@ class Store:
         with self.transaction():
             project = self._project(owner, project_id)
             self._revision(project, revision)
-            self._idle(project_id)
+            self._idle(project_id, {kind})
             asset = next((item for item in project["assets"] if item["id"] == asset_id and item["kind"] == kind), None)
             if not asset or project["current"][kind] != asset_id or asset["sha256"] != sha256:
                 raise StudioError("This asset is no longer the current review candidate.", 409)
@@ -263,7 +279,7 @@ class Store:
             self._save(project)
         return self.get(owner, project_id)
 
-    def begin_job(self, owner, project_id, revision, kind, operation_id):
+    def begin_job(self, owner, project_id, revision, kind, operation_id, generation_token=None):
         identifier(operation_id)
         if kind not in {"image", "audio", "video"}:
             raise StudioError("Invalid generation stage.")
@@ -275,8 +291,11 @@ class Store:
                 if job["project_id"] != project_id or job["kind"] != kind:
                     raise StudioError("Operation identity already used.", 409)
                 return job, False
-            self._revision(project, revision)
-            self._idle(project_id)
+            if generation_token is None or kind == "video":
+                self._revision(project, revision)
+            elif generation_token != preparation_token(project, kind):
+                raise StudioError("The generation inputs changed. Review the current details before trying again.", 409)
+            self._idle(project_id, None if kind == "video" else {kind})
             assets = {}
             if kind == "video":
                 assets = {stage: self._approved(project, stage) for stage in ("image", "audio")}
@@ -318,6 +337,24 @@ class Store:
             job["updated_at"] = time.time()
             self.db.execute("UPDATE jobs SET data=? WHERE id=?", (json.dumps(job), job_id))
         return job
+
+    def resolve_job(self, owner, job_id):
+        with self.transaction():
+            job = self.job(owner, job_id)
+            if (
+                job["kind"] not in {"image", "audio"}
+                or job.get("runner") != "preparation"
+                or job["state"] not in {"unknown", "dismissed"}
+            ):
+                raise StudioError("Only unresolved portrait or narration preparation can be dismissed.", 409)
+            if job["state"] == "dismissed":
+                return job
+            return self.update_job(
+                job_id,
+                state="dismissed",
+                message="Unresolved preparation dismissed locally. No new generation or cancellation was submitted. "
+                "Existing remote work may still be billed; check provider usage before generating again.",
+            )
 
     def pending_jobs(self):
         with self.transaction():

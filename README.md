@@ -1,5 +1,11 @@
 # BytePlus Avatar Studio
 
+**Version 0.2.0:** generate portraits and narration independently or in parallel,
+with per-button progress and no extra billing-confirmation dialog. Isolated CPU
+workers preserve native ComfyUI cancellation, and explicit unresolved-preparation
+recovery reopens a stage without automatically submitting replacement work.
+Portrait and narration approvals remain required before video generation.
+
 A separate ComfyUI extension with a bundled React web app for:
 
 1. Write or import a script, or upload ready-made narration.
@@ -64,8 +70,9 @@ by default; failures, unresolved tasks and recovery controls remain visible.
 
 Editor state is separated from the form sections. Polling preserves unsaved
 drafts, detects conflicting edits from another tab, and ignores outdated
-responses. Writes are serialized; duplicate confirmation clicks cannot submit
-another operation. Generation confirmations bind the current project revision.
+responses. Short save/submission requests are serialized; duplicate Generate
+clicks cannot submit another operation. Generate saves valid edits and starts
+the selected request directly, without a second billing confirmation.
 Radix dialogs contain keyboard focus, restore it on close, and block dismissal
 while an operation is pending.
 The bottom-right **Settings > API keys** dialog manages upload access outside
@@ -92,9 +99,9 @@ Pending or Flagged does not mean available. Source/manual installation remains
 an alternative. Studio requires a separate companion installation and does not
 replace it or install it automatically.
 
-**Release prerequisite:** ModelArk v0.10.0 was Flagged pending review when this
-release was prepared on November 20, 2026. Check its current Registry status;
-do not assume Studio publication resolves the companion's review.
+**Release prerequisite:** check the current Registry status of both Studio and
+ModelArk before relying on Manager installation. Studio publication does not
+resolve the companion's review.
 The ZIP contains runtime code and the built frontend, not development sources,
 tests, local state or credentials. Runtime Python packages are supplied by
 ComfyUI; Studio adds no Python provider dependencies. License terms and bundled
@@ -153,7 +160,7 @@ access. Studio does not scrape private frontend stores or browser credentials.
 Authorization is refreshed before queue submission. **OAuth video submission
 requires an idle ComfyUI queue**, so the token is not placed behind existing
 long-running work. A busy queue returns a wait-and-retry message before queuing;
-wait for it to finish and explicitly confirm generation again, or select an
+wait for it to finish and click Generate again, or select an
 upload API key to use normal queuing. There is no mid-execution refresh, so
 logout or expiry during upload can still fail. Uncertain paid work is never
 automatically resubmitted.
@@ -200,8 +207,45 @@ and never starts generation.
 
 Studio never treats the Vision AI key as a ModelArk, Seed Speech or Comfy.org key.
 
-Every generation still requires a paid-request confirmation. Direct media
-uploads are local operations and do not submit paid generation requests.
+Clicking Generate authorizes that paid request; there is no extra confirmation
+dialog. Direct media uploads are local operations and do not submit paid
+generation requests.
+
+## Independent Preparation
+
+Portrait and narration have independent Generate buttons. Start either one,
+or start the other while it is running: the companion nodes execute concurrently,
+not one behind the other in ComfyUI's prompt queue. Each button shows its own
+starting/generating spinner or needs-attention state. Reloading Studio preserves
+the running jobs while the server remains open.
+
+An active stage locks its own inputs, uploads, regeneration and approval, while
+the other stage remains usable. Video generation waits until neither stage is
+active or unresolved and both current assets are explicitly approved. A failed
+or interrupted request never starts a replacement automatically.
+
+Preparation graphs and text-only narration are validated before execution.
+Each preparation then starts a separate CPU worker, where `PreparationRunner`
+invokes the existing Seedream/Seed Audio nodes and core image/audio savers.
+Workers do not share ComfyUI's process-global interrupt flag, so cancelling a
+native workflow cannot cancel Studio or lose its cancellation to Studio.
+This isolation adds worker startup time and memory usage; no local GPU model is
+loaded. Provider transports are not duplicated, and the normal queue is unchanged.
+
+Only the relevant provider key and region are passed through a private stdin
+pipe, never command arguments or temporary credential files. Worker logs are
+suppressed; its response contains only safe state and saved-media metadata.
+Known pre-execution validation/setup failures leave the stage editable.
+Uncertain execution remains unresolved without automatically retrying.
+Use **Resolve preparation** in Activity after checking provider usage to dismiss
+that local operation and reopen its stage. This neither cancels remote work nor
+generates a replacement; existing remote work may still be billed. Active or
+collectable results cannot be dismissed.
+
+Progress stays in Studio. Video and recovery retain the native queue. Shutdown
+terminates active local workers, and a stdin watchdog exits the worker if its
+parent backend dies. A restarted server marks missing work unresolved without
+submitting again.
 
 ## Upload Your Media
 
@@ -250,6 +294,8 @@ access. Using uploaded audio does not require a Seed Speech key.
 - OmniHuman requires one clip **4-300 seconds** long, inclusive. Seed Audio's
   combined script/style prompt limit is 3000 characters, not a guaranteed
   five-minute narration allowance. Short or silent results cannot be approved.
+- Video duration follows the approved narration. There is no separate duration
+  setting; trim or regenerate the audio before approving it to change the length.
 - A failed/interrupted video keeps its task identity. **Collect task** uses the
   existing OmniHuman Task Result node, not a new generation or media upload.
 - **Request cancellation** delegates directly to the companion's existing
@@ -268,18 +314,31 @@ flowchart LR
     Routes --> State["SQLite projects and immutable assets"]
     Routes --> Upload["Validate and prepare direct uploads"]
     Upload --> State
+    Routes --> Prepare["Isolated CPU preparation workers"]
+    Prepare --> Portrait["Companion Seedream"]
+    Prepare --> Narration["Companion Seed Audio"]
+    Portrait --> Candidates["Core SaveImage and SaveAudio"]
+    Narration --> Candidates
     Routes --> Approval{"Current approved image and audio?"}
     Approval -->|No| Review["Return to review"]
     Approval -->|Yes| Queue["ComfyUI prompt queue"]
-    Queue --> Nodes["Companion Seedream, Seed Audio, OmniHuman nodes"]
-    Nodes --> Save["Core SaveImage, SaveAudio, SaveVideo"]
+    Queue --> Nodes["Companion OmniHuman nodes"]
+    Nodes --> Save["Core SaveVideo"]
     Save --> Collect["Prepare review media and persist results"]
+    Candidates --> Collect
     Collect --> State
     Routes --> Cancel["Companion queued-only cancellation helper"]
 ```
 
 `avatar_studio/store.py` owns revision checks, approvals and job identity.
 `workflows.py` builds restricted graphs. `bridge.py` owns ComfyUI integration.
+`preparation_process.py` owns subprocess lifetime and private credential handoff.
+`preparation_worker.py` loads the installed core/companion inside each CPU worker.
+`preparation.py` runs the fixed image/audio graphs using native DynamicCombo
+input conversion, isolated V3 hidden contexts and core media savers.
+Generation input tokens bind each preparation to its own source fields and
+current candidate; unrelated stage completion does not invalidate the request.
+Older clients without these tokens still require an exact project revision.
 `service.py` collects outputs and handles recovery. `routes.py` serves the app.
 `upload_credentials.py` owns opt-in Comfy.org credential storage; provider keys
 remain companion-managed.
@@ -395,7 +454,7 @@ Build the frontend first, then create the manual-install distribution:
 ```sh
 npm --prefix frontend run build
 python scripts/package.py
-shasum -a 256 -c ComfyUI-BytePlus-Avatar-Studio-0.1.0.zip.sha256
+shasum -a 256 -c ComfyUI-BytePlus-Avatar-Studio-0.2.0.zip.sha256
 ```
 
 `scripts/package.py` checks matching frontend/backend versions, required files,
@@ -444,15 +503,15 @@ are separate from a successful Actions run.
 
 ### Finalization Results
 
-Verified on **November 20, 2026**:
+Latest local validation on **November 21, 2026**:
 
 | Check | Result |
 | --- | --- |
-| Backend and distribution tests | 112 passed |
-| Frontend unit tests | 53 passed |
-| Offline browser tests | 48 passed; four native checks skipped here |
-| Native launcher and login-broker checks | 4 passed |
-| Native workflow validation | 5 variants passed |
+| Backend and distribution tests | 145 passed |
+| Frontend unit tests | 54 passed |
+| Offline browser tests | 56 passed; four native checks skipped here |
+| Native launcher and login-broker checks | 4 passed in prior validation |
+| Native workflow validation | 5 variants, parallel saver smoke and 5 isolated-worker checks passed |
 | Ruff, mypy, ESLint, TypeScript, Python compilation and Vite build | Passed |
 | npm audit | Zero known vulnerabilities |
 | Package integrity and repeated-build checksum | Passed |
@@ -481,12 +540,12 @@ No Comfy.org API key was configured for those video requests.
 
 The active cancellation attempt was not confirmed and its task completed.
 A completed-task probe exposed HTTP 400/code 50217 from the provider; the
-released companion recognizes that refusal only under HTTP 2xx. Studio now
+v0.10.0 companion recognizes that refusal only under HTTP 2xx. Studio now
 maps that exact released-helper exception to "not canceled" without exposing
 its contents or duplicating the provider client. Other failures remain errors.
 The compatibility adapter passed a live completed-task smoke check.
-The authorized follow-up also fixes this response directly in the local
-ModelArk helper; Studio keeps its adapter for released v0.10.0 installations.
+ModelArk v0.11.0 fixes this response directly in its helper; Studio keeps its
+adapter for released v0.10.0 installations.
 All 33 OmniHuman tests pass, including redaction and unrelated-error cases.
 A local HTTP fixture verifies successful queued cancellation and running-task
 refusal through the real transport and node. This is not a new live provider test.
@@ -511,8 +570,13 @@ includes backend changes. Registry preparation and publication are described
 above. Existing diagrams were checked against source; renderer validation was
 not rerun during finalization.
 
-**Still unverified:** successful live queued cancellation, paid five-minute
-video, older Desktop binaries and Windows credential ACL behavior.
+Release verification also passed against ModelArk v0.11.0: all five native
+workflow variants, parallel saver smoke, five isolated-worker checks and four
+native launcher/login tests, using mocked providers and synthetic authorization.
+
+**Still unverified:** paid parallel preparation, successful live queued
+cancellation, paid five-minute video, older Desktop binaries, Windows worker
+lifecycle and Windows credential ACL behavior.
 Public/multi-user deployment remains unsupported. The local companion-root
 `.env` is now owner-only (`0600`), with contents unchanged.
 

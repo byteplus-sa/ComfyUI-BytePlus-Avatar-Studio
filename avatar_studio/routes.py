@@ -103,7 +103,8 @@ def create_routes(service_provider, owner_provider, dist):
         elif action == "disconnect":
             result = (
                 sessions.disconnect_producer(owner, producer, data["link_id"])
-                if producer else sessions.disconnect(owner, consumer)
+                if producer
+                else sessions.disconnect(owner, consumer)
             )
         else:
             raise StudioError("Login action not found.", 404)
@@ -231,10 +232,7 @@ def create_routes(service_provider, owner_provider, dist):
         if type(use_saved) is not bool or type(use_login) is not bool:
             raise StudioError("Invalid upload authentication selection.")
         supplied = request.headers.get("X-Comfy-Org-Api-Key", "")
-        if (
-            sum((use_saved, use_login, bool(supplied))) > 1
-            or ((use_saved or use_login) and data["kind"] != "video")
-        ):
+        if sum((use_saved, use_login, bool(supplied))) > 1 or ((use_saved or use_login) and data["kind"] != "video"):
             raise StudioError("Select exactly one upload authentication source for video generation.")
         key = ""
         sensitive = {}
@@ -259,6 +257,7 @@ def create_routes(service_provider, owner_provider, dist):
                 data["kind"],
                 data["operation_id"],
                 sensitive,
+                generation_token=data.get("generation_token"),
             ),
             status=202,
         )
@@ -269,6 +268,16 @@ def create_routes(service_provider, owner_provider, dist):
         data = await payload(request)
         return web.json_response(
             await service_provider().recover(owner_provider(request), request.match_info["job_id"], data["task_id"])
+        )
+
+    @routes.post(f"{PREFIX}/api/jobs/{{job_id}}/resolve")
+    @guard
+    async def resolve(request):
+        data = await payload(request)
+        if data.get("acknowledge") is not True:
+            raise StudioError("Explicit acknowledgement is required to dismiss unresolved preparation.")
+        return web.json_response(
+            await service_provider().resolve(owner_provider(request), request.match_info["job_id"])
         )
 
     @routes.post(f"{PREFIX}/api/jobs/{{job_id}}/cancel")

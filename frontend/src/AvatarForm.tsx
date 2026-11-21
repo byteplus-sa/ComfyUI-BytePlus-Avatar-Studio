@@ -49,7 +49,7 @@ export function AvatarForm({
   }, []);
   const { form } = studio;
   if (!form) return null;
-  const disabled = studio.working || studio.active || studio.conflict;
+  const disabled = studio.working || studio.conflict || (studio.activeFor("image") && studio.activeFor("audio"));
   const fieldErrors = {
     ...validateDraft(form),
     ...(studio.project &&
@@ -94,7 +94,7 @@ export function AvatarForm({
   }
 
   function requestGeneration(kind: Kind) {
-    if (!form || disabled) return;
+    if (!form || studio.working || studio.conflict || studio.activeFor(kind)) return;
     setAttempt(kind);
     if (!focusFirstError(generationErrors(form, kind))) generate(kind);
   }

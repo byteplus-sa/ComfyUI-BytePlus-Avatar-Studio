@@ -63,7 +63,7 @@ jobs:
         run: |
           comfy --skip-prompt --no-enable-telemetry node publish \
             --token "$REGISTRY_ACCESS_TOKEN" \
-            --changelog "Review-first avatar creation with Seedream, Seed Audio and OmniHuman; direct uploads, explicit approvals, Desktop OAuth and local video download. Requires ModelArk >=0.10.0."
+            --changelog "Independent portrait and narration generation in isolated CPU workers, per-button progress, direct Generate actions and explicit unresolved-preparation recovery. Asset approvals and Desktop OAuth remain supported. Requires ModelArk >=0.10.0."
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -71,5 +71,5 @@ jobs:
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" --verify-tag --title "$TAG" \
-              --notes "BytePlus Avatar Studio. Requires ComfyUI >=0.31.0 and ModelArk >=0.10.0. Registry upload success is separate from security-scan approval; verify both packages are Active before relying on Manager installation."
+              --notes "BytePlus Avatar Studio: independent and parallel portrait/narration preparation, isolated workers, per-button progress and explicit unresolved-preparation recovery. Generate starts directly; asset approvals remain required before video. Requires ComfyUI >=0.31.0 and ModelArk >=0.10.0. Registry upload success is separate from security-scan approval; verify both packages are Active before relying on Manager installation."
           fi
