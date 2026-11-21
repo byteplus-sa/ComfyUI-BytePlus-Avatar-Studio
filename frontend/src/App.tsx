@@ -2,10 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   LoaderCircle,
-  LockKeyhole,
   Menu,
   Settings2,
-  Sparkles,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -22,7 +20,6 @@ import type { Job, Kind } from "./model";
 type Modal =
   | { type: "settings"; page?: "home" | "api-keys" }
   | { type: "projects" }
-  | { type: "generate"; kind: Kind; revision: number }
   | { type: "cancel"; job: Job }
   | null;
 
@@ -36,6 +33,7 @@ export function App() {
     if (studio.error) errorBanner.current?.scrollIntoView({ block: "nearest" });
   }, [studio.error]);
   const activeJob = studio.project?.jobs.find((job) =>
+    (job.kind === "video" || job.state === "unknown") &&
     ["preparing", "queued", "running", "unknown"].includes(job.state),
   );
 
@@ -45,21 +43,13 @@ export function App() {
   async function create() {
     if (await studio.create()) setModal(null);
   }
-  function askGeneration(kind: Kind) {
-    void studio.prepare((project) =>
-      setModal({ type: "generate", kind, revision: project.revision }),
-    );
-  }
-  async function confirmGeneration() {
-    if (modal?.type !== "generate") return;
-    await studio.generate(
-      modal.kind,
+  function generate(kind: Kind) {
+    void studio.generate(
+      kind,
       login.selected ? "" : upload.sessionKey,
-      modal.revision,
       !login.selected && upload.source === "server",
       login.selected ? login.session : "",
     );
-    setModal(null);
   }
 
   return (
@@ -183,7 +173,7 @@ export function App() {
                 openSettings={() =>
                   setModal({ type: "settings", page: "api-keys" })
                 }
-                generate={askGeneration}
+                generate={generate}
               />
               <Activity
                 studio={studio}
@@ -227,47 +217,6 @@ export function App() {
           initialPage={modal.page}
           onClose={() => setModal(null)}
         />
-      )}
-      {modal?.type === "generate" && (
-        <Dialog
-          title={`Generate ${modal.kind === "image" ? "a portrait" : modal.kind === "audio" ? "narration" : "your avatar video"}?`}
-          onClose={() => setModal(null)}
-          busy={studio.working}
-        >
-          <p>
-            This starts one paid generation request on your BytePlus account.{" "}
-            {modal.kind === "video"
-              ? "Only the approved portrait and narration will be used."
-              : "The result is a candidate for your review, not an approved asset."}
-          </p>
-          <div className="consent-note">
-            <LockKeyhole className="size-4 shrink-0" />
-            <span>
-              No automatic retries. Interrupted video generation may continue
-              remotely and still be billed.
-            </span>
-          </div>
-          <div className="modal-actions">
-            <Button
-              variant="outline"
-              disabled={studio.working}
-              onClick={() => setModal(null)}
-            >
-              Not yet
-            </Button>
-            <Button
-              disabled={studio.working}
-              onClick={() => void confirmGeneration()}
-            >
-              {studio.working ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Sparkles />
-              )}{" "}
-              Generate & bill my account
-            </Button>
-          </div>
-        </Dialog>
       )}
       {modal?.type === "cancel" && (
         <Dialog

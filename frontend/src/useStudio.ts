@@ -25,6 +25,7 @@ export function useStudio() {
   const [setup, setSetup] = useState<Setup | null>(null);
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
+  const [submitting, setSubmitting] = useState<Kind | null>(null);
   const [booting, setBooting] = useState(true);
   const operation = useRef(false);
   const epoch = useRef(0);
@@ -190,38 +191,37 @@ export function useStudio() {
   async function generate(
     kind: Kind,
     uploadKey: string,
-    confirmedRevision: number,
     useSavedUploadKey = false,
     loginSession = "",
   ) {
     return run(async () => {
-      if (
-        !editor ||
-        editor.conflict ||
-        dirty ||
-        confirmedRevision !== editor.project.revision
-      ) {
-        throw new Error(
-          "The project changed. Review the current details and confirm again.",
+      if (!editor || editor.conflict || busy(editor.project, kind))
+        throw new Error("This stage is active or needs attention.");
+      setSubmitting(kind);
+      try {
+        const saved = await saveDraft();
+        const headers: Record<string, string> = {};
+        if (kind === "video") {
+          if (loginSession) headers["X-Studio-Login"] = loginSession;
+          if (uploadKey) headers["X-Comfy-Org-Api-Key"] = uploadKey;
+        }
+        const next = await post<Project>(
+          `/projects/${saved.id}/generate`,
+          {
+            kind,
+            revision: saved.revision,
+            generation_token:
+              kind === "video" ? undefined : saved.generation_tokens?.[kind],
+            operation_id: crypto.randomUUID(),
+            use_saved_upload_key: kind === "video" && useSavedUploadKey,
+            use_comfy_login: kind === "video" && Boolean(loginSession),
+          },
+          headers,
         );
+        setEditor(openEditor(next));
+      } finally {
+        setSubmitting(null);
       }
-      const headers: Record<string, string> = {};
-      if (kind === "video") {
-        if (loginSession) headers["X-Studio-Login"] = loginSession;
-        if (uploadKey) headers["X-Comfy-Org-Api-Key"] = uploadKey;
-      }
-      const next = await post<Project>(
-        `/projects/${editor.project.id}/generate`,
-        {
-          kind,
-          revision: confirmedRevision,
-          operation_id: crypto.randomUUID(),
-          use_saved_upload_key: kind === "video" && useSavedUploadKey,
-          use_comfy_login: kind === "video" && Boolean(loginSession),
-        },
-        headers,
-      );
-      setEditor(openEditor(next));
     });
   }
 
@@ -350,9 +350,11 @@ export function useStudio() {
     setup,
     error,
     working,
+    submitting,
     booting,
     dirty,
     active: editor ? busy(editor.project) : false,
+    activeFor: (kind: Kind) => editor ? busy(editor.project, kind) : false,
     field,
     select,
     create,
@@ -367,10 +369,6 @@ export function useStudio() {
     save: () =>
       run(async () => {
         await saveDraft();
-      }),
-    prepare: (onReady: (project: Project) => void) =>
-      run(async () => {
-        onReady(await saveDraft());
       }),
     refreshSetup: () =>
       run(async () => {

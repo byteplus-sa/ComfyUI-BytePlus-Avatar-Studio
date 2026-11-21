@@ -15,6 +15,11 @@
 - Accept direct portrait/audio uploads as unapproved candidates; keep their
   origin distinct from generated assets. No separate rights-permission checkbox.
 - Bind approval to immutable asset ID/hash and reject stale revisions.
+- Generate starts directly without an extra billing-confirmation modal.
+- Image/audio preparation runs concurrently through existing companion nodes
+  and native savers; no duplicate provider transport or global queue mutation.
+- Lock only the active preparation stage. Video waits for both reviewed assets
+  and no active or unresolved preparation jobs.
 - No automatic paid-submit retries. Preserve unknown submissions and task IDs.
 - Cancellation delegates to the companion's existing queued-only helper, not
   the ordinary prompt queue, which may be occupied by the video wait.

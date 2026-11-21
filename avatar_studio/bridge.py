@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import inspect
 import re
@@ -5,6 +6,7 @@ import shutil
 import time
 from pathlib import Path
 
+from .preparation import PreparationRunner, preparation_kind
 from .store import StudioError, digest
 
 REQUIRED_NODES = {
@@ -29,6 +31,9 @@ class ComfyBridge:
         self.nodes = importlib.import_module("nodes")
         self.paths = importlib.import_module("folder_paths")
         self.execution = importlib.import_module("execution")
+        self.preparation = PreparationRunner(self.nodes, self.execution)
+        self.preparations = {}
+        self.preparation_tasks = {}
 
     def companion_module(self, name):
         node = self.nodes.NODE_CLASS_MAPPINGS.get("BytePlusOmniHuman")
@@ -89,6 +94,7 @@ class ComfyBridge:
         return destination.name
 
     async def submit(self, graph, prompt_id, sensitive, owner):
+        kind = preparation_kind(graph)
         parameters = len(inspect.signature(self.execution.validate_prompt).parameters)
         if parameters >= 3:
             valid = await self.execution.validate_prompt(prompt_id, graph, None)
@@ -101,6 +107,16 @@ class ComfyBridge:
             raise StudioError(
                 "The workflow does not match this ComfyUI installation. Update ComfyUI and the companion.", 422
             )
+        if kind:
+            if sensitive:
+                raise StudioError("Portrait and narration preparation do not accept upload credentials.")
+            if prompt_id in self.preparations:
+                return
+            self.preparations[prompt_id] = {"state": "running"}
+            task = asyncio.create_task(self._prepare(graph, prompt_id))
+            self.preparation_tasks[prompt_id] = task
+            task.add_done_callback(lambda finished: self._preparation_finished(prompt_id, finished))
+            return
         extra = {
             "create_time": time.time_ns() // 1_000_000,
             "comfy_usage_source": "byteplus-avatar-studio",
@@ -117,6 +133,31 @@ class ComfyBridge:
             number = self.server.number
             self.server.number += 1
             queue.put((number, prompt_id, graph, extra, valid[2], sensitive))
+
+    async def _prepare(self, graph, prompt_id):
+        try:
+            outputs = await self.preparation.run(graph)
+            self.preparations[prompt_id] = {"state": "finished", "outputs": outputs}
+        except BaseException as error:
+            self.preparations[prompt_id] = {"state": "unknown"}
+            if not isinstance(error, Exception):
+                raise
+
+    def _preparation_finished(self, prompt_id, task):
+        self.preparation_tasks.pop(prompt_id, None)
+        if not task.cancelled():
+            task.exception()
+
+    def release(self, prompt_id):
+        self.preparations.pop(prompt_id, None)
+
+    async def close(self):
+        tasks = list(self.preparation_tasks.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self.preparations.clear()
 
     async def cancel_task(self, task_id):
         api = self.companion_module("omnihuman_api")
@@ -135,6 +176,8 @@ class ComfyBridge:
             raise StudioError("Cancellation could not be confirmed. Remote work may still continue.", 503) from None
 
     def inspect(self, job):
+        if job.get("runner") == "preparation":
+            return self.preparations.get(job["prompt_id"], {"state": "missing"})
         history = self.server.prompt_queue.get_history(job["prompt_id"]).get(job["prompt_id"])
         task_id = job.get("task_id")
         if job["kind"] == "video":

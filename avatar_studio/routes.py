@@ -103,7 +103,8 @@ def create_routes(service_provider, owner_provider, dist):
         elif action == "disconnect":
             result = (
                 sessions.disconnect_producer(owner, producer, data["link_id"])
-                if producer else sessions.disconnect(owner, consumer)
+                if producer
+                else sessions.disconnect(owner, consumer)
             )
         else:
             raise StudioError("Login action not found.", 404)
@@ -231,10 +232,7 @@ def create_routes(service_provider, owner_provider, dist):
         if type(use_saved) is not bool or type(use_login) is not bool:
             raise StudioError("Invalid upload authentication selection.")
         supplied = request.headers.get("X-Comfy-Org-Api-Key", "")
-        if (
-            sum((use_saved, use_login, bool(supplied))) > 1
-            or ((use_saved or use_login) and data["kind"] != "video")
-        ):
+        if sum((use_saved, use_login, bool(supplied))) > 1 or ((use_saved or use_login) and data["kind"] != "video"):
             raise StudioError("Select exactly one upload authentication source for video generation.")
         key = ""
         sensitive = {}
@@ -259,6 +257,7 @@ def create_routes(service_provider, owner_provider, dist):
                 data["kind"],
                 data["operation_id"],
                 sensitive,
+                generation_token=data.get("generation_token"),
             ),
             status=202,
         )

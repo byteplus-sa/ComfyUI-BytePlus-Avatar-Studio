@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { Project } from "../src/model";
 
-test("generated candidates can be approved inline before video confirmation", async ({
+test("generated candidates must be approved inline before direct video generation", async ({
   page,
   request,
 }) => {
@@ -161,12 +161,7 @@ test("generated candidates can be approved inline before video confirmation", as
     page.getByRole("button", { name: "Generate avatar video" }),
   ).toBeEnabled();
   await page.getByRole("button", { name: "Generate avatar video" }).click();
-  await expect(page.getByRole("dialog")).toContainText(
-    "Only the approved portrait and narration will be used.",
-  );
-  await page
-    .getByRole("button", { name: "Generate & bill my account", exact: true })
-    .click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("alert")).toContainText(
     "Offline generation fixture",
   );

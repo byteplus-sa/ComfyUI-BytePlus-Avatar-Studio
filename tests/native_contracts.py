@@ -69,6 +69,9 @@ async def verify(core, companion, studio):
             if not result[0] or result[3] or "save" not in result[2]:
                 raise AssertionError(f"Invalid {case} workflow: {result[1:4]}")
             print(f"PASS native workflow validation: {case}")
+        from native_preparation import verify_parallel_preparation
+
+        await verify_parallel_preparation(nodes, execution, folder_paths, project)
         for callback in server.app.on_cleanup:
             await callback(server.app)
 

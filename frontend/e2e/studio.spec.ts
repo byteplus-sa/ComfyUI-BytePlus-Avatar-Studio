@@ -23,7 +23,7 @@ test.beforeEach(async ({ request }) => {
   expect(response.status()).toBe(201);
 });
 
-test("one form supports editing, saving, inline approvals and paid confirmation", async ({
+test("one form supports editing, saving and direct generation without a confirmation", async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -33,6 +33,9 @@ test("one form supports editing, saving, inline approvals and paid confirmation"
     if (request.method() === "POST" && request.url().endsWith("/generate"))
       submissions.push(request.url());
   });
+  await page.route("**/api/projects/*/generate", route =>
+    route.fulfill({ status: 503, json: { error: "Offline generation fixture" } }),
+  );
   await page.goto(path);
   await expect(
     page.getByRole("form", { name: "Avatar creation" }),
@@ -70,11 +73,10 @@ test("one form supports editing, saving, inline approvals and paid confirmation"
   await page
     .getByRole("button", { name: "Generate portrait", exact: true })
     .click();
-  await expect(page.getByRole("dialog")).toContainText(
-    "one paid generation request",
-  );
-  await page.getByRole("button", { name: "Not yet" }).click();
-  expect(submissions).toHaveLength(0);
+  await expect(page.getByRole("alert")).toContainText("Offline generation fixture");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(submissions).toHaveLength(1);
+  await page.getByRole("button", { name: "Dismiss error" }).click();
   await expect(
     page.getByRole("button", { name: "Approve portrait" }),
   ).toHaveCount(0);
@@ -271,7 +273,7 @@ test("an invalid script upload preserves the current draft", async ({
   );
 });
 
-test("rapid confirmation clicks submit only one operation", async ({
+test("rapid Generate clicks submit only one operation", async ({
   page,
 }) => {
   let submissions = 0;
@@ -289,9 +291,6 @@ test("rapid confirmation clicks submit only one operation", async ({
   await page.getByLabel("Character prompt").fill("A fictional presenter");
   await page
     .getByRole("button", { name: "Generate portrait", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: "Generate & bill my account" })
     .evaluate((button: HTMLButtonElement) => {
       button.click();
       button.click();
@@ -300,10 +299,13 @@ test("rapid confirmation clicks submit only one operation", async ({
   expect(submissions).toBe(1);
 });
 
-test("polling continues after canceling a clean generation confirmation", async ({
+test("polling continues after a failed direct generation request", async ({
   page,
   request,
 }) => {
+  await page.route("**/api/projects/*/generate", route =>
+    route.fulfill({ status: 503, json: { error: "Offline generation fixture" } }),
+  );
   await page.goto(path);
   await page.getByLabel("Character prompt").fill("A fictional presenter");
   await page.getByRole("button", { name: "Save details" }).click();
@@ -313,7 +315,7 @@ test("polling continues after canceling a clean generation confirmation", async 
   await page
     .getByRole("button", { name: "Generate portrait", exact: true })
     .click();
-  await page.getByRole("button", { name: "Not yet" }).click();
+  await expect(page.getByRole("alert")).toContainText("Offline generation fixture");
   const list = await (await request.get(`${path}api/projects`)).json();
   const project = await (
     await request.get(`${path}api/projects/${list.projects[0].id}`)
@@ -495,9 +497,14 @@ test("empty generation shows inline errors and focuses the required field", asyn
   expect(submissions).toBe(0);
 });
 
-test("combined audio prompt length is validated before confirmation", async ({
+test("combined audio prompt length is validated before direct generation", async ({
   page,
 }) => {
+  let submissions = 0;
+  await page.route("**/api/projects/*/generate", route => {
+    submissions += 1;
+    return route.fulfill({ status: 503, json: { error: "Offline generation fixture" } });
+  });
   await page.goto(path);
   await page.getByLabel("Narration script").fill("x".repeat(3000));
   await page
@@ -514,8 +521,9 @@ test("combined audio prompt length is validated before confirmation", async ({
   await page
     .getByRole("button", { name: "Generate narration", exact: true })
     .click();
-  await expect(page.getByRole("dialog")).toBeVisible();
-  await page.getByRole("button", { name: "Not yet" }).click();
+  await expect(page.getByRole("alert")).toContainText("Offline generation fixture");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(submissions).toBe(1);
 });
 
 test("Enter saves an incomplete draft without starting generation", async ({

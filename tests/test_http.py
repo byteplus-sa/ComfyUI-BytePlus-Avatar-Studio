@@ -177,6 +177,44 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 503)
         self.bridge.submit.assert_not_awaited()
 
+    async def test_image_and_audio_accept_the_same_saved_snapshot_without_duplicate_stage_work(self):
+        await self.patch(script="Welcome to our studio.", character_prompt="A fictional presenter")
+        target = f"{PREFIX}/api/projects/{self.project['id']}/generate"
+
+        def body(kind):
+            return {
+                "revision": self.project["revision"],
+                "kind": kind,
+                "operation_id": str(uuid4()),
+                "generation_token": self.project["generation_tokens"][kind],
+            }
+
+        responses = await asyncio.gather(
+            self.client.post(target, json=body("image")), self.client.post(target, json=body("audio"))
+        )
+        self.assertEqual([response.status for response in responses], [202, 202])
+        self.assertEqual(self.bridge.submit.await_count, 2)
+        current = self.store.get("default", self.project["id"])
+        self.assertEqual({job["kind"] for job in current["jobs"]}, {"image", "audio"})
+        self.assertTrue(all(job["runner"] == "preparation" for job in current["jobs"]))
+        self.assertEqual((await self.client.post(target, json=body("image"))).status, 409)
+        self.assertEqual(self.bridge.submit.await_count, 2)
+
+    async def test_unknown_preparation_after_restart_is_not_requeued_or_marked_successful(self):
+        await self.patch(character_prompt="A fictional presenter")
+        response = await self.client.post(
+            f"{PREFIX}/api/projects/{self.project['id']}/generate",
+            json={"revision": self.project["revision"], "kind": "image", "operation_id": str(uuid4())},
+        )
+        project = await response.json()
+        job = project["jobs"][0]
+        self.bridge.inspect.return_value = {"state": "missing"}
+        await self.service.tick(job)
+        unresolved = self.store.job("default", job["id"])
+        self.assertEqual(unresolved["state"], "unknown")
+        self.assertIn("other preparation stage", unresolved["message"])
+        self.assertEqual(self.bridge.submit.await_count, 1)
+
     async def test_unknown_acceptance_is_not_retried_and_secret_exception_is_not_exposed(self):
         await self.patch(character_prompt="Fictional presenter")
         self.bridge.submit.side_effect = RuntimeError("SENSITIVE_FIXTURE_DO_NOT_EXPOSE")

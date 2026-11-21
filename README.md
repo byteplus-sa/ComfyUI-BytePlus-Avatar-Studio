@@ -64,8 +64,9 @@ by default; failures, unresolved tasks and recovery controls remain visible.
 
 Editor state is separated from the form sections. Polling preserves unsaved
 drafts, detects conflicting edits from another tab, and ignores outdated
-responses. Writes are serialized; duplicate confirmation clicks cannot submit
-another operation. Generation confirmations bind the current project revision.
+responses. Short save/submission requests are serialized; duplicate Generate
+clicks cannot submit another operation. Generate saves valid edits and starts
+the selected request directly, without a second billing confirmation.
 Radix dialogs contain keyboard focus, restore it on close, and block dismissal
 while an operation is pending.
 The bottom-right **Settings > API keys** dialog manages upload access outside
@@ -153,7 +154,7 @@ access. Studio does not scrape private frontend stores or browser credentials.
 Authorization is refreshed before queue submission. **OAuth video submission
 requires an idle ComfyUI queue**, so the token is not placed behind existing
 long-running work. A busy queue returns a wait-and-retry message before queuing;
-wait for it to finish and explicitly confirm generation again, or select an
+wait for it to finish and click Generate again, or select an
 upload API key to use normal queuing. There is no mid-execution refresh, so
 logout or expiry during upload can still fail. Uncertain paid work is never
 automatically resubmitted.
@@ -200,8 +201,30 @@ and never starts generation.
 
 Studio never treats the Vision AI key as a ModelArk, Seed Speech or Comfy.org key.
 
-Every generation still requires a paid-request confirmation. Direct media
-uploads are local operations and do not submit paid generation requests.
+Clicking Generate authorizes that paid request; there is no extra confirmation
+dialog. Direct media uploads are local operations and do not submit paid
+generation requests.
+
+## Independent Preparation
+
+Portrait and narration have independent Generate buttons. Start either one,
+or start the other while it is running: the companion nodes execute concurrently,
+not one behind the other in ComfyUI's prompt queue. Each button shows its own
+starting/generating spinner or needs-attention state. Reloading Studio preserves
+the running jobs while the server remains open.
+
+An active stage locks its own inputs, uploads, regeneration and approval, while
+the other stage remains usable. Video generation waits until neither stage is
+active or unresolved and both current assets are explicitly approved. A failed
+or interrupted request never starts a replacement automatically.
+
+Preparation graphs are validated by ComfyUI, then the restricted
+`PreparationRunner` invokes the existing Seedream/Seed Audio nodes and core
+image/audio savers using isolated native V3 class contexts. It does not create
+provider clients, reset global progress/interrupt state, or change the normal
+ComfyUI queue. Progress stays in Studio. Video and recovery retain the native
+queue. Server shutdown stops local preparation waiting; a restarted server
+marks missing work unresolved, without submitting again.
 
 ## Upload Your Media
 
@@ -268,18 +291,29 @@ flowchart LR
     Routes --> State["SQLite projects and immutable assets"]
     Routes --> Upload["Validate and prepare direct uploads"]
     Upload --> State
+    Routes --> Prepare["Independent preparation tasks"]
+    Prepare --> Portrait["Companion Seedream"]
+    Prepare --> Narration["Companion Seed Audio"]
+    Portrait --> Candidates["Core SaveImage and SaveAudio"]
+    Narration --> Candidates
     Routes --> Approval{"Current approved image and audio?"}
     Approval -->|No| Review["Return to review"]
     Approval -->|Yes| Queue["ComfyUI prompt queue"]
-    Queue --> Nodes["Companion Seedream, Seed Audio, OmniHuman nodes"]
-    Nodes --> Save["Core SaveImage, SaveAudio, SaveVideo"]
+    Queue --> Nodes["Companion OmniHuman nodes"]
+    Nodes --> Save["Core SaveVideo"]
     Save --> Collect["Prepare review media and persist results"]
+    Candidates --> Collect
     Collect --> State
     Routes --> Cancel["Companion queued-only cancellation helper"]
 ```
 
 `avatar_studio/store.py` owns revision checks, approvals and job identity.
 `workflows.py` builds restricted graphs. `bridge.py` owns ComfyUI integration.
+`preparation.py` runs the fixed image/audio graphs independently. It uses native
+DynamicCombo input conversion, isolated V3 hidden contexts and core media savers.
+Generation input tokens bind each preparation to its own source fields and
+current candidate; unrelated stage completion does not invalidate the request.
+Older clients without these tokens still require an exact project revision.
 `service.py` collects outputs and handles recovery. `routes.py` serves the app.
 `upload_credentials.py` owns opt-in Comfy.org credential storage; provider keys
 remain companion-managed.
@@ -448,11 +482,11 @@ Verified on **November 20, 2026**:
 
 | Check | Result |
 | --- | --- |
-| Backend and distribution tests | 112 passed |
-| Frontend unit tests | 53 passed |
-| Offline browser tests | 48 passed; four native checks skipped here |
+| Backend and distribution tests | 122 passed |
+| Frontend unit tests | 54 passed |
+| Offline browser tests | 50 passed; four native checks skipped here |
 | Native launcher and login-broker checks | 4 passed |
-| Native workflow validation | 5 variants passed |
+| Native workflow validation | 5 variants plus parallel preparation smoke passed |
 | Ruff, mypy, ESLint, TypeScript, Python compilation and Vite build | Passed |
 | npm audit | Zero known vulnerabilities |
 | Package integrity and repeated-build checksum | Passed |

@@ -40,6 +40,7 @@ export interface Project extends Form {
   >;
   assets: Asset[];
   jobs: Job[];
+  generation_tokens?: Record<"image" | "audio", string>;
 }
 export interface Setup {
   ready: boolean;
@@ -119,7 +120,7 @@ export function sourceChanged(
   if (currentAsset(project, kind)?.origin === "upload") return false;
   const fields: (keyof Form)[] =
     kind === "image"
-      ? ["character_prompt", "ratio"]
+      ? ["character_prompt", "ratio", "enable_watermark"]
       : ["script", "voice_direction", "language"];
   return fields.some((field) => project[field] !== form[field]);
 }
@@ -131,9 +132,10 @@ export function videoReadyForDraft(project: Project, form: Form): boolean {
     videoReady(project)
   );
 }
-export function busy(project: Project): boolean {
+export function busy(project: Project, kind?: Kind): boolean {
   return project.jobs.some((job) =>
-    ["preparing", "queued", "running", "unknown"].includes(job.state),
+    ["preparing", "queued", "running", "unknown"].includes(job.state) &&
+    (!kind || kind === "video" || job.kind === "video" || job.kind === kind),
   );
 }
 export function duration(seconds = 0): string {

@@ -73,7 +73,7 @@ test("Desktop login is selected by default and video sends a capability, never a
     .toContainText("Optional. Your linked ComfyUI login already provides upload access.");
   await page.getByRole("button", { name: "Done", exact: true }).click();
   await page.getByRole("button", { name: "Generate avatar video", exact: true }).click();
-  await page.getByRole("button", { name: "Generate & bill my account", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("alert")).toContainText("Offline fixture");
   expect(submissions).toBe(1);
   const stored = await page.evaluate(() => JSON.stringify([localStorage, sessionStorage]));

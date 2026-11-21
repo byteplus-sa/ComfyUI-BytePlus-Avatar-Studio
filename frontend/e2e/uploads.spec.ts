@@ -102,12 +102,7 @@ test("users can upload and approve both inputs with no script, prompt or permiss
     page.getByRole("button", { name: "Generate avatar video" }),
   ).toBeEnabled();
   await page.getByRole("button", { name: "Generate avatar video" }).click();
-  await expect(page.getByRole("dialog")).toContainText(
-    "one paid generation request",
-  );
-  await page
-    .getByRole("button", { name: "Generate & bill my account" })
-    .click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("alert")).toContainText("Offline video fixture");
   expect(generations).toEqual(["video"]);
   await page

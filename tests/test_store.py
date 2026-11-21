@@ -168,6 +168,88 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises(StudioError):
             self.store.update(self.owner, project["id"], project["revision"], {"script": "x" * 3001})
 
+    def test_portrait_and_narration_can_run_independently(self):
+        image, _ = self.store.begin_job(self.owner, self.project["id"], 0, "image", str(uuid4()))
+        current = self.store.get(self.owner, self.project["id"])
+        audio, _ = self.store.begin_job(self.owner, current["id"], current["revision"], "audio", str(uuid4()))
+        self.assertEqual({job["kind"] for job in self.store.pending_jobs()}, {"image", "audio"})
+        for kind in ("image", "audio", "video"):
+            current = self.store.get(self.owner, self.project["id"])
+            with self.subTest(kind=kind), self.assertRaises(StudioError):
+                self.store.begin_job(self.owner, current["id"], current["revision"], kind, str(uuid4()))
+        self.store.update_job(image["id"], state="done")
+        current = self.store.get(self.owner, self.project["id"])
+        self.store.begin_job(self.owner, current["id"], current["revision"], "image", str(uuid4()))
+        self.assertEqual(self.store.job(self.owner, audio["id"])["state"], "preparing")
+
+    def test_other_stage_inputs_and_approvals_remain_available_during_preparation(self):
+        portrait = self.asset("image")
+        current = self.store.get(self.owner, self.project["id"])
+        self.store.begin_job(self.owner, current["id"], current["revision"], "audio", str(uuid4()))
+        current = self.store.get(self.owner, current["id"])
+        current = self.store.approve(
+            self.owner, current["id"], current["revision"], "image", portrait["id"], portrait["sha256"]
+        )
+        self.assertIsNotNone(current["approvals"]["image"])
+        current = self.store.update(
+            self.owner, current["id"], current["revision"], {"character_prompt": "New portrait"}
+        )
+        for fields in ({"script": "Changed narration"}, {"voice_direction": "Different voice"}):
+            with self.subTest(fields=fields), self.assertRaises(StudioError):
+                self.store.update(self.owner, current["id"], current["revision"], fields)
+
+    def test_stage_token_accepts_unrelated_completion_but_rejects_changed_source(self):
+        original = self.store.get(self.owner, self.project["id"])
+        self.asset("image")
+        _, created = self.store.begin_job(
+            self.owner,
+            original["id"],
+            original["revision"],
+            "audio",
+            str(uuid4()),
+            generation_token=original["generation_tokens"]["audio"],
+        )
+        self.assertTrue(created)
+        with self.assertRaises(StudioError):
+            self.store.begin_job(
+                self.owner,
+                original["id"],
+                original["revision"],
+                "image",
+                str(uuid4()),
+                generation_token=original["generation_tokens"]["image"],
+            )
+
+    def test_unknown_preparation_blocks_only_its_stage_and_video(self):
+        image, _ = self.store.begin_job(self.owner, self.project["id"], 0, "image", str(uuid4()))
+        self.store.update_job(image["id"], state="unknown")
+        current = self.store.get(self.owner, self.project["id"])
+        self.store.begin_job(self.owner, current["id"], current["revision"], "audio", str(uuid4()))
+        current = self.store.get(self.owner, current["id"])
+        with self.assertRaises(StudioError):
+            self.store.begin_job(self.owner, current["id"], current["revision"], "image", str(uuid4()))
+
+    def test_concurrent_preparation_clicks_accept_at_most_one_job_per_stage(self):
+        project = self.store.get(self.owner, self.project["id"])
+
+        def submit(kind):
+            try:
+                self.store.begin_job(
+                    self.owner,
+                    project["id"],
+                    project["revision"],
+                    kind,
+                    str(uuid4()),
+                    generation_token=project["generation_tokens"][kind],
+                )
+                return kind
+            except StudioError:
+                return None
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            accepted = list(pool.map(submit, ["image", "audio", "image", "audio"]))
+        self.assertEqual(sorted(kind for kind in accepted if kind), ["audio", "image"])
+
 
 if __name__ == "__main__":
     unittest.main()

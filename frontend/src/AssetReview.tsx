@@ -27,7 +27,7 @@ export function AssetReview({
     (!asset.duration || asset.duration < 4 || asset.duration > 300);
   const disabled =
     studio.working ||
-    studio.active ||
+    studio.activeFor(kind) ||
     studio.conflict ||
     studio.dirty ||
     invalidAudio;
