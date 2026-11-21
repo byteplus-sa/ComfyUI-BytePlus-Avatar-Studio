@@ -1,6 +1,6 @@
 [project]
 name = "ComfyUI-BytePlus-Avatar-Studio"
-version = "0.1.0"
+version = "0.2.0"
 description = "A review-first avatar web app for ComfyUI using BytePlus Seedream, Seed Audio and OmniHuman."
 requires-python = ">=3.10"
 license = { file = "LICENSE" }

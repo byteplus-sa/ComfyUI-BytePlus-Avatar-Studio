@@ -1,5 +1,11 @@
 # BytePlus Avatar Studio
 
+**Version 0.2.0:** generate portraits and narration independently or in parallel,
+with per-button progress and no extra billing-confirmation dialog. Isolated CPU
+workers preserve native ComfyUI cancellation, and explicit unresolved-preparation
+recovery reopens a stage without automatically submitting replacement work.
+Portrait and narration approvals remain required before video generation.
+
 A separate ComfyUI extension with a bundled React web app for:
 
 1. Write or import a script, or upload ready-made narration.
@@ -93,9 +99,9 @@ Pending or Flagged does not mean available. Source/manual installation remains
 an alternative. Studio requires a separate companion installation and does not
 replace it or install it automatically.
 
-**Release prerequisite:** ModelArk v0.10.0 was Flagged pending review when this
-release was prepared on November 20, 2026. Check its current Registry status;
-do not assume Studio publication resolves the companion's review.
+**Release prerequisite:** check the current Registry status of both Studio and
+ModelArk before relying on Manager installation. Studio publication does not
+resolve the companion's review.
 The ZIP contains runtime code and the built frontend, not development sources,
 tests, local state or credentials. Runtime Python packages are supplied by
 ComfyUI; Studio adds no Python provider dependencies. License terms and bundled
@@ -288,6 +294,8 @@ access. Using uploaded audio does not require a Seed Speech key.
 - OmniHuman requires one clip **4-300 seconds** long, inclusive. Seed Audio's
   combined script/style prompt limit is 3000 characters, not a guaranteed
   five-minute narration allowance. Short or silent results cannot be approved.
+- Video duration follows the approved narration. There is no separate duration
+  setting; trim or regenerate the audio before approving it to change the length.
 - A failed/interrupted video keeps its task identity. **Collect task** uses the
   existing OmniHuman Task Result node, not a new generation or media upload.
 - **Request cancellation** delegates directly to the companion's existing
@@ -446,7 +454,7 @@ Build the frontend first, then create the manual-install distribution:
 ```sh
 npm --prefix frontend run build
 python scripts/package.py
-shasum -a 256 -c ComfyUI-BytePlus-Avatar-Studio-0.1.0.zip.sha256
+shasum -a 256 -c ComfyUI-BytePlus-Avatar-Studio-0.2.0.zip.sha256
 ```
 
 `scripts/package.py` checks matching frontend/backend versions, required files,
@@ -532,12 +540,12 @@ No Comfy.org API key was configured for those video requests.
 
 The active cancellation attempt was not confirmed and its task completed.
 A completed-task probe exposed HTTP 400/code 50217 from the provider; the
-released companion recognizes that refusal only under HTTP 2xx. Studio now
+v0.10.0 companion recognizes that refusal only under HTTP 2xx. Studio now
 maps that exact released-helper exception to "not canceled" without exposing
 its contents or duplicating the provider client. Other failures remain errors.
 The compatibility adapter passed a live completed-task smoke check.
-The authorized follow-up also fixes this response directly in the local
-ModelArk helper; Studio keeps its adapter for released v0.10.0 installations.
+ModelArk v0.11.0 fixes this response directly in its helper; Studio keeps its
+adapter for released v0.10.0 installations.
 All 33 OmniHuman tests pass, including redaction and unrelated-error cases.
 A local HTTP fixture verifies successful queued cancellation and running-task
 refusal through the real transport and node. This is not a new live provider test.
@@ -562,8 +570,13 @@ includes backend changes. Registry preparation and publication are described
 above. Existing diagrams were checked against source; renderer validation was
 not rerun during finalization.
 
-**Still unverified:** successful live queued cancellation, paid five-minute
-video, older Desktop binaries and Windows credential ACL behavior.
+Release verification also passed against ModelArk v0.11.0: all five native
+workflow variants, parallel saver smoke, five isolated-worker checks and four
+native launcher/login tests, using mocked providers and synthetic authorization.
+
+**Still unverified:** paid parallel preparation, successful live queued
+cancellation, paid five-minute video, older Desktop binaries, Windows worker
+lifecycle and Windows credential ACL behavior.
 Public/multi-user deployment remains unsupported. The local companion-root
 `.env` is now owner-only (`0600`), with contents unchanged.
 
