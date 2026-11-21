@@ -50,8 +50,10 @@ test("one form supports editing, saving and direct generation without a confirma
     .getByRole("button", { name: "Generate portrait", exact: true })
     .click();
   await expect(page.locator("#character-error")).toBeVisible();
+  await expect(page.getByLabel("Character prompt")).toBeFocused();
   await capturePreview(page, "-validation");
   await page.getByLabel("Project name").fill("Brand introduction");
+  await expect(page.getByLabel("Project name")).toHaveValue("Brand introduction");
   await page
     .getByLabel("Narration script")
     .fill(
@@ -62,7 +64,13 @@ test("one form supports editing, saving and direct generation without a confirma
     .fill(
       "A confident, warm fictional presenter in a minimal studio. Soft natural lighting, a neutral outfit, and a relaxed expression. Direct eye contact, chest-up framing.",
     );
+  const savedResponse = page.waitForResponse(
+    response => response.request().method() === "PATCH" && response.url().includes("/api/projects/"),
+  );
   await page.getByRole("button", { name: "Save details" }).click();
+  const saved = await savedResponse;
+  expect(saved.status()).toBe(200);
+  expect((await saved.json()).title).toBe("Brand introduction");
   await expect(
     page.getByRole("button", { name: "Saved", exact: true }),
   ).toBeDisabled();
