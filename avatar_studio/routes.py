@@ -270,6 +270,16 @@ def create_routes(service_provider, owner_provider, dist):
             await service_provider().recover(owner_provider(request), request.match_info["job_id"], data["task_id"])
         )
 
+    @routes.post(f"{PREFIX}/api/jobs/{{job_id}}/resolve")
+    @guard
+    async def resolve(request):
+        data = await payload(request)
+        if data.get("acknowledge") is not True:
+            raise StudioError("Explicit acknowledgement is required to dismiss unresolved preparation.")
+        return web.json_response(
+            await service_provider().resolve(owner_provider(request), request.match_info["job_id"])
+        )
+
     @routes.post(f"{PREFIX}/api/jobs/{{job_id}}/cancel")
     @guard
     async def cancel(request):

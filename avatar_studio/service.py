@@ -124,6 +124,30 @@ class StudioService:
             self.start()
             return self.store.get(owner, job["project_id"])
 
+    async def resolve(self, owner, job_id):
+        job = self.store.job(owner, job_id)
+        lock = self.locks.setdefault(job["project_id"], asyncio.Lock())
+        async with lock:
+            job = self.store.job(owner, job_id)
+            if (
+                job["kind"] not in {"image", "audio"}
+                or job.get("runner") != "preparation"
+                or job["state"] not in {"unknown", "dismissed"}
+            ):
+                raise StudioError("Only unresolved portrait or narration preparation can be dismissed.", 409)
+            if job["state"] == "dismissed":
+                return self.store.get(owner, job["project_id"])
+            state = self.bridge.inspect(job)
+            if state.get("state") not in {"unknown", "missing"}:
+                raise StudioError(
+                    "Preparation is still active or has a result to collect. Wait for collection before resolving.",
+                    409,
+                )
+            self.store.resolve_job(owner, job_id)
+            if release := getattr(self.bridge, "release", None):
+                release(job["prompt_id"])
+            return self.store.get(owner, job["project_id"])
+
     async def cancel(self, owner, job_id):
         job = self.store.job(owner, job_id)
         lock = self.locks.setdefault(job["project_id"], asyncio.Lock())

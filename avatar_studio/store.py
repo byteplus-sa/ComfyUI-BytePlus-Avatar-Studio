@@ -338,6 +338,24 @@ class Store:
             self.db.execute("UPDATE jobs SET data=? WHERE id=?", (json.dumps(job), job_id))
         return job
 
+    def resolve_job(self, owner, job_id):
+        with self.transaction():
+            job = self.job(owner, job_id)
+            if (
+                job["kind"] not in {"image", "audio"}
+                or job.get("runner") != "preparation"
+                or job["state"] not in {"unknown", "dismissed"}
+            ):
+                raise StudioError("Only unresolved portrait or narration preparation can be dismissed.", 409)
+            if job["state"] == "dismissed":
+                return job
+            return self.update_job(
+                job_id,
+                state="dismissed",
+                message="Unresolved preparation dismissed locally. No new generation or cancellation was submitted. "
+                "Existing remote work may still be billed; check provider usage before generating again.",
+            )
+
     def pending_jobs(self):
         with self.transaction():
             return [

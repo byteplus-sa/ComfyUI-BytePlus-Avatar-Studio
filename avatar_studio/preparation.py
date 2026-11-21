@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import inspect
 from typing import Any
 
@@ -14,6 +15,22 @@ def preparation_kind(graph):
     if types == ["BytePlusSeedAudio", "SaveAudio"]:
         return "audio"
     raise StudioError("Only Studio portrait and narration workflows can use parallel preparation.", 422)
+
+
+def validate_preparation(nodes, graph):
+    kind = preparation_kind(graph)
+    if not kind:
+        raise StudioError("This workflow is not a preparation workflow.", 422)
+    if kind == "audio":
+        module = importlib.import_module(nodes.NODE_CLASS_MAPPINGS["BytePlusSeedAudio"].__module__)
+        inputs = next(node["inputs"] for node in graph.values() if node["class_type"] == "BytePlusSeedAudio")
+        try:
+            module.validate_seed_audio_inputs(inputs["text_prompt"], inputs["reference_mode"], [], False)
+        except Exception:
+            raise StudioError(
+                "Narration is invalid for Seed Audio text-only mode. Remove audio-reference tags and check its length.",
+                422,
+            ) from None
 
 
 class PreparationRunner:

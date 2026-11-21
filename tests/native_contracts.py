@@ -58,7 +58,7 @@ async def verify(core, companion, studio):
         }
         for case in ("image", "reference", "audio", "video", "recovery"):
             kind = "image" if case == "reference" else "video" if case == "recovery" else case
-            job = {"kind": kind, "id": case, "project_id": "native-check"}
+            job: dict[str, str | bool] = {"kind": kind, "id": case, "project_id": "native-check"}
             sources = {"image": "approved.png", "audio": "approved.wav"}
             if case == "reference":
                 sources["reference"] = "approved.png"
@@ -70,10 +70,14 @@ async def verify(core, companion, studio):
                 raise AssertionError(f"Invalid {case} workflow: {result[1:4]}")
             print(f"PASS native workflow validation: {case}")
         from native_preparation import verify_parallel_preparation
+        from native_process import verify_preparation_processes
 
-        await verify_parallel_preparation(nodes, execution, folder_paths, project)
-        for callback in server.app.on_cleanup:
-            await callback(server.app)
+        try:
+            await verify_parallel_preparation(nodes, execution, folder_paths, project)
+            await verify_preparation_processes(core, companion, nodes, folder_paths, server, project)
+        finally:
+            for callback in server.app.on_cleanup:
+                await callback(server.app)
 
 
 if __name__ == "__main__":

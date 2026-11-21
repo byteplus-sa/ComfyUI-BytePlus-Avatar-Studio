@@ -342,6 +342,17 @@ export function useStudio() {
     });
   }
 
+  async function resolve(job: Job) {
+    return run(async () => {
+      const next = await post<Project>(`/jobs/${job.id}/resolve`, {
+        acknowledge: true,
+      });
+      setEditor((current) =>
+        current ? receiveProject(current, next) : current,
+      );
+    });
+  }
+
   return {
     project: editor?.project ?? null,
     form: editor?.form ?? null,
@@ -366,6 +377,7 @@ export function useStudio() {
     uploadScript,
     recover,
     cancel,
+    resolve,
     save: () =>
       run(async () => {
         await saveDraft();

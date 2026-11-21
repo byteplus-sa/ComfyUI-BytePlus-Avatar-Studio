@@ -21,6 +21,7 @@ type Modal =
   | { type: "settings"; page?: "home" | "api-keys" }
   | { type: "projects" }
   | { type: "cancel"; job: Job }
+  | { type: "resolve"; job: Job }
   | null;
 
 export function App() {
@@ -178,6 +179,10 @@ export function App() {
               <Activity
                 studio={studio}
                 requestCancel={(job) => setModal({ type: "cancel", job })}
+                requestResolve={(job) => {
+                  studio.dismissError();
+                  setModal({ type: "resolve", job });
+                }}
               />
             </>
           )}
@@ -217,6 +222,40 @@ export function App() {
           initialPage={modal.page}
           onClose={() => setModal(null)}
         />
+      )}
+      {modal?.type === "resolve" && (
+        <Dialog
+          title="Resolve preparation"
+          onClose={() => setModal(null)}
+          busy={studio.working}
+        >
+          <p>
+            Dismiss this unresolved {modal.job.kind === "image" ? "portrait" : "narration"} preparation
+            to reopen its stage. This does not generate a replacement and does
+            not cancel existing work. Existing remote work may still be billed.
+            Check provider usage before generating again.
+          </p>
+          {studio.error && <p className="alert error" role="alert">{studio.error}</p>}
+          <div className="modal-actions">
+            <Button
+              variant="outline"
+              disabled={studio.working}
+              onClick={() => setModal(null)}
+            >
+              Keep unresolved
+            </Button>
+            <Button
+              disabled={studio.working}
+              onClick={() =>
+                void studio.resolve(modal.job).then((resolved) => {
+                  if (resolved) setModal(null);
+                })
+              }
+            >
+              Dismiss unresolved preparation
+            </Button>
+          </div>
+        </Dialog>
       )}
       {modal?.type === "cancel" && (
         <Dialog

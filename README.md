@@ -218,13 +218,28 @@ the other stage remains usable. Video generation waits until neither stage is
 active or unresolved and both current assets are explicitly approved. A failed
 or interrupted request never starts a replacement automatically.
 
-Preparation graphs are validated by ComfyUI, then the restricted
-`PreparationRunner` invokes the existing Seedream/Seed Audio nodes and core
-image/audio savers using isolated native V3 class contexts. It does not create
-provider clients, reset global progress/interrupt state, or change the normal
-ComfyUI queue. Progress stays in Studio. Video and recovery retain the native
-queue. Server shutdown stops local preparation waiting; a restarted server
-marks missing work unresolved, without submitting again.
+Preparation graphs and text-only narration are validated before execution.
+Each preparation then starts a separate CPU worker, where `PreparationRunner`
+invokes the existing Seedream/Seed Audio nodes and core image/audio savers.
+Workers do not share ComfyUI's process-global interrupt flag, so cancelling a
+native workflow cannot cancel Studio or lose its cancellation to Studio.
+This isolation adds worker startup time and memory usage; no local GPU model is
+loaded. Provider transports are not duplicated, and the normal queue is unchanged.
+
+Only the relevant provider key and region are passed through a private stdin
+pipe, never command arguments or temporary credential files. Worker logs are
+suppressed; its response contains only safe state and saved-media metadata.
+Known pre-execution validation/setup failures leave the stage editable.
+Uncertain execution remains unresolved without automatically retrying.
+Use **Resolve preparation** in Activity after checking provider usage to dismiss
+that local operation and reopen its stage. This neither cancels remote work nor
+generates a replacement; existing remote work may still be billed. Active or
+collectable results cannot be dismissed.
+
+Progress stays in Studio. Video and recovery retain the native queue. Shutdown
+terminates active local workers, and a stdin watchdog exits the worker if its
+parent backend dies. A restarted server marks missing work unresolved without
+submitting again.
 
 ## Upload Your Media
 
@@ -291,7 +306,7 @@ flowchart LR
     Routes --> State["SQLite projects and immutable assets"]
     Routes --> Upload["Validate and prepare direct uploads"]
     Upload --> State
-    Routes --> Prepare["Independent preparation tasks"]
+    Routes --> Prepare["Isolated CPU preparation workers"]
     Prepare --> Portrait["Companion Seedream"]
     Prepare --> Narration["Companion Seed Audio"]
     Portrait --> Candidates["Core SaveImage and SaveAudio"]
@@ -309,8 +324,10 @@ flowchart LR
 
 `avatar_studio/store.py` owns revision checks, approvals and job identity.
 `workflows.py` builds restricted graphs. `bridge.py` owns ComfyUI integration.
-`preparation.py` runs the fixed image/audio graphs independently. It uses native
-DynamicCombo input conversion, isolated V3 hidden contexts and core media savers.
+`preparation_process.py` owns subprocess lifetime and private credential handoff.
+`preparation_worker.py` loads the installed core/companion inside each CPU worker.
+`preparation.py` runs the fixed image/audio graphs using native DynamicCombo
+input conversion, isolated V3 hidden contexts and core media savers.
 Generation input tokens bind each preparation to its own source fields and
 current candidate; unrelated stage completion does not invalidate the request.
 Older clients without these tokens still require an exact project revision.
@@ -478,15 +495,15 @@ are separate from a successful Actions run.
 
 ### Finalization Results
 
-Verified on **November 20, 2026**:
+Latest local validation on **November 21, 2026**:
 
 | Check | Result |
 | --- | --- |
-| Backend and distribution tests | 122 passed |
+| Backend and distribution tests | 145 passed |
 | Frontend unit tests | 54 passed |
-| Offline browser tests | 50 passed; four native checks skipped here |
-| Native launcher and login-broker checks | 4 passed |
-| Native workflow validation | 5 variants plus parallel preparation smoke passed |
+| Offline browser tests | 56 passed; four native checks skipped here |
+| Native launcher and login-broker checks | 4 passed in prior validation |
+| Native workflow validation | 5 variants, parallel saver smoke and 5 isolated-worker checks passed |
 | Ruff, mypy, ESLint, TypeScript, Python compilation and Vite build | Passed |
 | npm audit | Zero known vulnerabilities |
 | Package integrity and repeated-build checksum | Passed |

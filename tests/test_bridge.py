@@ -19,6 +19,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             return validation
 
         bridge.execution = SimpleNamespace(validate_prompt=validate)
+        bridge.validate_preparation = Mock()
         return bridge
 
     async def test_partial_validation_cannot_submit_paid_generation_without_its_saver(self):
@@ -164,6 +165,27 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(StudioError):
             await bridge.submit(graph, "operation", {}, "default")
         bridge.server.prompt_queue.put.assert_not_called()
+
+    async def test_definite_preparation_validation_failure_never_starts_a_worker(self):
+        bridge = self.bridge((True, None, ["save"], {}))
+        bridge.preparations = {}
+        bridge.validate_preparation.side_effect = StudioError("Invalid narration.", 422)
+        bridge.preparation = SimpleNamespace(run=AsyncMock())
+        graph = {
+            "generate": {"class_type": "BytePlusSeedAudio", "inputs": {}},
+            "save": {"class_type": "SaveAudio", "inputs": {}},
+        }
+        with self.assertRaises(StudioError):
+            await bridge.submit(graph, "audio", {}, "default")
+        bridge.preparation.run.assert_not_awaited()
+        self.assertFalse(bridge.preparations)
+
+    async def test_worker_setup_failure_is_failed_not_permanently_unknown(self):
+        bridge = self.bridge((True, None, ["save"], {}))
+        bridge.preparations = {}
+        bridge.preparation = SimpleNamespace(run=AsyncMock(side_effect=StudioError("Worker setup failed.")))
+        await bridge._prepare({}, "audio")
+        self.assertEqual(bridge.inspect({"runner": "preparation", "prompt_id": "audio"}), {"state": "failed"})
 
     async def test_released_companion_http_400_cancel_refusal_is_not_a_server_failure(self):
         class ProviderError(Exception):

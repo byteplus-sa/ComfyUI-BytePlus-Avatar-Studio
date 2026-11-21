@@ -229,6 +229,79 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises(StudioError):
             self.store.begin_job(self.owner, current["id"], current["revision"], "image", str(uuid4()))
 
+    def test_resolution_reopens_only_the_dismissed_preparation_stage(self):
+        self.prepare()
+        original = self.store.get(self.owner, self.project["id"])
+        jobs = {}
+        for kind in ("image", "audio"):
+            current = self.store.get(self.owner, original["id"])
+            job, _ = self.store.begin_job(self.owner, current["id"], current["revision"], kind, str(uuid4()))
+            jobs[kind] = self.store.update_job(job["id"], state="unknown", runner="preparation")
+        resolved = self.store.resolve_job(self.owner, jobs["image"]["id"])
+        self.assertEqual(resolved["state"], "dismissed")
+        self.assertEqual(resolved["prompt_id"], jobs["image"]["prompt_id"])
+        current = self.store.get(self.owner, original["id"])
+        self.assertEqual(current["current"], original["current"])
+        self.assertEqual(current["approvals"], original["approvals"])
+        self.assertEqual(current["assets"], original["assets"])
+        self.assertEqual([job["id"] for job in self.store.pending_jobs()], [jobs["audio"]["id"]])
+        for kind in ("audio", "video"):
+            with self.subTest(kind=kind), self.assertRaises(StudioError):
+                self.store.begin_job(self.owner, current["id"], current["revision"], kind, str(uuid4()))
+        updated = self.store.update(
+            self.owner, current["id"], current["revision"], {"character_prompt": "Another portrait"}
+        )
+        _, created = self.store.begin_job(self.owner, updated["id"], updated["revision"], "image", str(uuid4()))
+        self.assertTrue(created)
+        self.assertEqual(self.store.resolve_job(self.owner, jobs["audio"]["id"])["state"], "dismissed")
+
+    def test_resolution_is_persistent_and_idempotent_without_reusing_the_operation(self):
+        job, _ = self.store.begin_job(self.owner, self.project["id"], 0, "audio", str(uuid4()))
+        self.store.update_job(job["id"], state="unknown", runner="preparation", task_id="retained-task")
+        first = self.store.resolve_job(self.owner, job["id"])
+        original = self.store.get(self.owner, self.project["id"])
+        other = Store(Path(self.folder.name))
+        self.addCleanup(other.close)
+        self.assertEqual(other.resolve_job(self.owner, job["id"]), first)
+        self.assertEqual(other.get(self.owner, self.project["id"]), original)
+        self.assertEqual(first["task_id"], "retained-task")
+        repeated, created = other.begin_job(self.owner, self.project["id"], 0, "audio", job["id"])
+        self.assertFalse(created)
+        self.assertEqual(repeated, first)
+        self.assertEqual(other.pending_jobs(), [])
+
+    def test_resolution_rejects_non_preparation_jobs_and_other_states(self):
+        job, _ = self.store.begin_job(self.owner, self.project["id"], 0, "image", str(uuid4()))
+        invalid = [
+            {"kind": "video", "state": "unknown", "runner": "preparation"},
+            {"kind": "image", "state": "unknown", "runner": "queue"},
+            {"kind": "audio", "state": "unknown", "runner": None},
+            {"kind": "video", "state": "dismissed", "runner": "preparation"},
+            *(
+                {"kind": "image", "state": state, "runner": "preparation"}
+                for state in ("preparing", "queued", "running", "failed", "done", "canceled")
+            ),
+        ]
+        for fields in invalid:
+            before = self.store.update_job(job["id"], **fields)
+            with self.subTest(fields=fields), self.assertRaises(StudioError) as caught:
+                self.store.resolve_job(self.owner, job["id"])
+            self.assertEqual(caught.exception.status, 409)
+            self.assertEqual(self.store.job(self.owner, job["id"]), before)
+
+    def test_resolution_enforces_ownership_and_valid_job_identity(self):
+        job, _ = self.store.begin_job(self.owner, self.project["id"], 0, "image", str(uuid4()))
+        self.store.update_job(job["id"], state="unknown", runner="preparation")
+        for owner, job_id, status in (
+            ("another-user", job["id"], 404),
+            (self.owner, str(uuid4()), 404),
+            (self.owner, "invalid", 400),
+        ):
+            with self.subTest(owner=owner, job_id=job_id), self.assertRaises(StudioError) as caught:
+                self.store.resolve_job(owner, job_id)
+            self.assertEqual(caught.exception.status, status)
+        self.assertEqual(self.store.job(self.owner, job["id"])["state"], "unknown")
+
     def test_concurrent_preparation_clicks_accept_at_most_one_job_per_stage(self):
         project = self.store.get(self.owner, self.project["id"])
 

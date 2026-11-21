@@ -4,9 +4,11 @@ import inspect
 import re
 import shutil
 import time
+from functools import cached_property
 from pathlib import Path
 
-from .preparation import PreparationRunner, preparation_kind
+from .preparation import preparation_kind, validate_preparation
+from .preparation_process import PreparationProcess
 from .store import StudioError, digest
 
 REQUIRED_NODES = {
@@ -31,9 +33,25 @@ class ComfyBridge:
         self.nodes = importlib.import_module("nodes")
         self.paths = importlib.import_module("folder_paths")
         self.execution = importlib.import_module("execution")
-        self.preparation = PreparationRunner(self.nodes, self.execution)
         self.preparations = {}
         self.preparation_tasks = {}
+
+    @cached_property
+    def preparation(self):
+        companion = self.companion_module("nodes_speech")
+        credentials = self.companion_module("credentials")
+        if not companion.__file__ or not self.nodes.__file__:
+            raise StudioError("The native preparation modules have no local source path.", 503)
+        return PreparationProcess(
+            Path(self.nodes.__file__).parent,
+            Path(companion.__file__).parent.parent,
+            self.paths.get_input_directory(),
+            self.paths.get_output_directory(),
+            credentials.get_setting,
+        )
+
+    def validate_preparation(self, graph):
+        validate_preparation(self.nodes, graph)
 
     def companion_module(self, name):
         node = self.nodes.NODE_CLASS_MAPPINGS.get("BytePlusOmniHuman")
@@ -112,6 +130,7 @@ class ComfyBridge:
                 raise StudioError("Portrait and narration preparation do not accept upload credentials.")
             if prompt_id in self.preparations:
                 return
+            self.validate_preparation(graph)
             self.preparations[prompt_id] = {"state": "running"}
             task = asyncio.create_task(self._prepare(graph, prompt_id))
             self.preparation_tasks[prompt_id] = task
@@ -138,6 +157,8 @@ class ComfyBridge:
         try:
             outputs = await self.preparation.run(graph)
             self.preparations[prompt_id] = {"state": "finished", "outputs": outputs}
+        except StudioError:
+            self.preparations[prompt_id] = {"state": "failed"}
         except BaseException as error:
             self.preparations[prompt_id] = {"state": "unknown"}
             if not isinstance(error, Exception):
