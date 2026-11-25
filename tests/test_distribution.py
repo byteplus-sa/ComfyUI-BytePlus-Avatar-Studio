@@ -14,7 +14,7 @@ class DistributionTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name) / "project"
-        for directory in ("avatar_studio", "web", "studio_dist/assets", "frontend", "credentials"):
+        for directory in ("avatar_studio", "web", "studio_dist/assets", "frontend", "credentials", "docs"):
             (self.root / directory).mkdir(parents=True, exist_ok=True)
         for name in (
             "__init__.py",
@@ -46,6 +46,7 @@ class DistributionTests(unittest.TestCase):
             "studio.sqlite3",
             "PLAN_DRAFT.md",
             "frontend/secret.txt",
+            "docs/development.md",
             "studio_dist/assets/debug.map",
         ):
             (self.root / name).write_text("private-fixture")
@@ -57,6 +58,11 @@ class DistributionTests(unittest.TestCase):
             self.assertIn("ComfyUI-BytePlus-Avatar-Studio/CVA_LICENSE.txt", names)
             self.assertFalse(any("private-fixture" in distribution.read(name).decode() for name in names))
         self.assertTrue(archive.with_suffix(".zip.sha256").is_file())
+
+    def test_reference_docs_are_excluded_from_registry_packaging(self):
+        root = Path(__file__).resolve().parents[1]
+        self.assertIn("docs/", (root / ".comfyignore").read_text().splitlines())
+        self.assertFalse(any("docs" in path.relative_to(root).parts for path in manifest(root)))
 
     def test_two_builds_have_identical_contents(self):
         first = package(self.root).read_bytes()
@@ -113,7 +119,14 @@ class DistributionTests(unittest.TestCase):
         self.assertEqual(check_registry_package(self.root, archive), len(manifest(self.root)) + 1)
 
     def test_registry_archive_rejects_secrets_development_files_and_traversal(self):
-        for extra in (".env", "tests/test_example.py", "../outside.py", "/absolute.py", "unexpected.txt"):
+        for extra in (
+            ".env",
+            "tests/test_example.py",
+            "docs/development.md",
+            "../outside.py",
+            "/absolute.py",
+            "unexpected.txt",
+        ):
             with self.subTest(extra=extra), self.assertRaises(ValueError):
                 check_registry_package(self.root, self.registry_archive(extra=extra))
 

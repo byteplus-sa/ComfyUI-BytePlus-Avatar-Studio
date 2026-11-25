@@ -1,6 +1,7 @@
 # BytePlus Avatar Studio
 
-- Implementation follows the architecture and contracts in `README.md`.
+- Implementation follows `docs/development.md`; user-facing behavior is in
+  `README.md` and `docs/usage.md`.
 - This is a separate companion extension, not a fork of ModelArk.
 - Requires ComfyUI-BytePlus-ModelArk >= 0.10.0; never duplicate provider clients.
 - Python backend, SQLite project state, static React/Vite app and one launcher.

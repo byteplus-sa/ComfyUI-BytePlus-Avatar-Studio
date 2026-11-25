@@ -3,6 +3,7 @@
 frontend/
 tests/
 scripts/
+docs/
 PLAN_*.md
 __pycache__/
 .ruff_cache/
