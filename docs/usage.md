@@ -2,6 +2,19 @@
 
 [Quick start](../README.md) | [Developer guide](development.md)
 
+## Install And Update
+
+Start in the ComfyUI editor: **top-left dropdown > Extensions > Nodes Manager >
+search `byteplus`**. Install **ComfyUI-BytePlus-ModelArk** and
+**ComfyUI-BytePlus-Avatar-Studio**, both from **byteplus-sa**. For an installed
+package, open its card and use **Update** when a newer release is available.
+Wait for completion, then **Apply Changes** if prompted or restart ComfyUI,
+and reload the editor.
+
+The [illustrated installation guide](../README.md#install) lists **Nodes Manager
+first**, **Comfy CLI second**, and **release ZIP installation last**. Both
+packages must be in the same active ComfyUI installation.
+
 ## Credentials
 
 Provider credentials are managed by the ModelArk companion in
@@ -122,6 +135,8 @@ Invalid, stale or canceled uploads do not replace the current candidate.
 
 | Situation | What to do |
 | --- | --- |
+| Install path already exists | Close ComfyUI, back up the affected extension outside `custom_nodes`, then install through Nodes Manager and restart. Keep `user/`, Studio projects and `user/.env`. |
+| No release is available for the selected update option | Check the update dropdown and Registry versions. This is not proof that you are up to date; pending or flagged versions may be unavailable through both Manager and CLI. |
 | Studio will not open | Confirm both extensions and minimum versions are installed, keep `studio_dist/`, and restart ComfyUI. |
 | Desktop login disconnected | Reopen Studio from its originating ComfyUI window; use an upload key only as an explicit alternative. |
 | OAuth submission says the queue is busy | Wait for native work to finish, then click Generate again. |

@@ -21,19 +21,82 @@ preparation, per-button progress and recovery for unresolved jobs.
 [ComfyUI-BytePlus-ModelArk](https://github.com/byteplus-sa/ComfyUI-BytePlus-ModelArk)
 >= 0.10.0. Install the companion separately.
 
-1. Download the Studio ZIP from [Releases](https://github.com/byteplus-sa/ComfyUI-BytePlus-Avatar-Studio/releases).
-2. Extract it into `ComfyUI/custom_nodes/`, keeping the
-   `ComfyUI-BytePlus-Avatar-Studio` folder and its bundled `studio_dist/`.
-3. Restart ComfyUI.
-4. Choose **BytePlus > Open BytePlus Avatar Studio** or its canvas context-menu
-   entry.
+### Nodes Manager (Recommended)
+
+Use **top-left dropdown > Extensions > Nodes Manager > search `byteplus` >
+Install**. No separate ZIP download is needed.
+
+1. In the ComfyUI editor, open the dropdown beside the **ComfyUI logo** at the
+   top left. Choose **Extensions** to open **Nodes Manager**.
+2. Keep **Node Pack** selected and search for **byteplus**.
+3. Install **ComfyUI BytePlus ModelArk, Speech, OmniHuman & MediaKit**
+   (`ComfyUI-BytePlus-ModelArk`) and **BytePlus Avatar Studio**
+   (`ComfyUI-BytePlus-Avatar-Studio`), both from **byteplus-sa**.
+4. If either package is already installed, open its card and choose **Update**
+   when a newer release is available. Do not install a duplicate copy.
+5. Wait for completion, then click **Apply Changes** if prompted, or restart
+   ComfyUI. Reload the editor after the restart.
+
+![ComfyUI top-left dropdown with Extensions visible](https://raw.githubusercontent.com/byteplus-sa/ComfyUI-BytePlus-Avatar-Studio/main/docs/nodes-manager-menu.webp)
+
+![Nodes Manager results for byteplus showing ModelArk and Avatar Studio](https://raw.githubusercontent.com/byteplus-sa/ComfyUI-BytePlus-Avatar-Studio/main/docs/nodes-manager-byteplus.webp)
+
+Use this same route for future updates to **both** packages. In older ComfyUI
+layouts, open **Manager > Custom Nodes Manager**.
+
+**No release is available for the selected update option?** Check the update
+dropdown and the Registry versions; the message does not necessarily mean you
+are up to date. A listing marked Active does not guarantee that each version
+is approved. Pending or flagged versions may be unavailable through Manager
+and the CLI.
+
+### Comfy CLI (Second Option)
+
+Configure [comfy-cli](https://github.com/Comfy-Org/comfy-cli) for the same
+ComfyUI installation you open, then install the companion and Studio:
+
+```bash
+comfy node install ComfyUI-BytePlus-ModelArk
+comfy node install ComfyUI-BytePlus-Avatar-Studio
+```
+
+For packages already installed, update instead:
+
+```bash
+comfy node update ComfyUI-BytePlus-ModelArk
+comfy node update ComfyUI-BytePlus-Avatar-Studio
+```
+
+Restart ComfyUI and reload the editor afterwards. The CLI uses the same
+Registry as Nodes Manager; it does not bypass release availability.
+
+### Release ZIP (Last Resort)
+
+1. Use a ZIP only when Manager and the CLI cannot install the required release.
+   Install the [ModelArk companion](https://byteplus-sa.github.io/ComfyUI-BytePlus-ModelArk/get-started/install/)
+   first, then download the Studio ZIP from
+   [Releases](https://github.com/byteplus-sa/ComfyUI-BytePlus-Avatar-Studio/releases).
+2. Close ComfyUI. Move any old Studio extension folder to a backup **outside
+   `custom_nodes`**. Extract the new ZIP into
+   `ComfyUI/custom_nodes/ComfyUI-BytePlus-Avatar-Studio/`, with `__init__.py`
+   and the bundled `studio_dist/` directly inside it, not another nested folder.
+3. Restart ComfyUI and reload the editor. Preserve the ComfyUI `user/` folder,
+   including your Studio projects and `user/.env` credentials.
+
+Manual ZIP extraction does not create Manager's `.tracking` metadata. If
+Manager shows **Install** but fails with **Install path already exists**,
+close ComfyUI, back up only the affected extension outside `custom_nodes`,
+then reopen ComfyUI and install it through Nodes Manager. Do not remove your
+user data or create an empty `.tracking` file.
+
+## Open Studio
+
+Choose **BytePlus > Open BytePlus Avatar Studio** or its canvas context-menu
+entry.
 
 Studio opens in an external browser, including when launched from Comfy Desktop.
 For browser-only ComfyUI, you can also visit
 `http://127.0.0.1:8188/byteplus/avatar-studio/`.
-
-Manager installation requires **Active** Registry versions for both packages.
-Pending or Flagged versions are not confirmed available through Manager.
 
 ## Set Up Keys
 
